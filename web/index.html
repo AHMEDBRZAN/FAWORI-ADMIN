@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FAWORI Admin</title>
+  <style>
+    html, body { margin: 0; background: #141419; height: 100%; overflow: hidden; }
+    #splash { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; background: #141419; z-index: 9999; }
+    .t { color: #E8A33D; font-size: 30px; font-weight: 900; font-family: system-ui; }
+    .l { margin-top: 20px; width: 44px; height: 44px; border: 3px solid rgba(232,163,61,.2); border-top-color: #E8A33D; border-radius: 50%; animation: s 1s linear infinite; }
+    @keyframes s { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="splash"><div class="t">FAWORI ADMIN</div><div class="l"></div></div>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      var s = document.getElementById('splash'); if (s) s.remove();
+    });
+    setTimeout(function () { var s = document.getElementById('splash'); if (s) s.remove(); }, 8000);
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
