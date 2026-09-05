@@ -828,6 +828,15 @@ class _AddGiftPageState extends State<AddGiftPage> {
   Uint8List? _bytes;
   bool _busy = false;
 
+  Future<void> _pick() async {
+    final f = await ImagePicker()
+        .pickImage(source: ImageSource.gallery, imageQuality: 70);
+    if (f == null) return;
+    final bytes = await f.readAsBytes();
+    if (!mounted) return;
+    setState(() => _bytes = bytes);
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
@@ -890,12 +899,7 @@ class _AddGiftPageState extends State<AddGiftPage> {
           padding: const EdgeInsets.all(20),
           children: [
             InkWell(
-              onTap: () async {
-                final f = await ImagePicker().pickImage(
-                    source: ImageSource.gallery, imageQuality: 70);
-                if (f == null) return;
-                setState(() => _bytes = await f.readAsBytes());
-              },
+              onTap: _pick,
               child: Container(
                 height: 200,
                 decoration: BoxDecoration(
