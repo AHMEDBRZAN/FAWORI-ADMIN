@@ -79,7 +79,7 @@ class GH {
         Uri.parse('https://api.github.com/repos/$kOwner/$kRepo/contents/$path?ref=$kBranch'),
         headers: headers(t));
     if (r.statusCode != 200) return null;
-    return jsonDecode(r.body)['sha'];
+    return jsonDecode(r.body)['sha'] as String?;
   }
 
   static Future<void> put(String path, String content, String t) async {
@@ -139,24 +139,36 @@ class Gate extends StatefulWidget {
 class _GateState extends State<Gate> {
   String? _token;
   bool _loading = true;
+
   @override
   void initState() {
     super.initState();
-    GH.getToken().then((t) => setState(() { _token = t; _loading = false; }));
+    _check();
+  }
+
+  Future<void> _check() async {
+    final t = await GH.getToken();
+    if (mounted) setState(() { _token = t; _loading = false; });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const Scaffold(body: Center(child: CircularProgressIndicator(color: kOrange)));
+    if (_loading) {
+      return const Scaffold(
+          body: Center(child: CircularProgressIndicator(color: kOrange)));
+    }
     return Directionality(
       textDirection: TextDirection.rtl,
-      child: _token == null ? const TokenPage() : Home(token: _token!),
+      child: _token == null
+          ? TokenPage(onSaved: _check)
+          : Home(token: _token!),
     );
   }
 }
 
 class TokenPage extends StatefulWidget {
-  const TokenPage({super.key});
+  final VoidCallback onSaved;
+  const TokenPage({super.key, required this.onSaved});
   @override
   State<TokenPage> createState() => _TokenPageState();
 }
@@ -174,9 +186,10 @@ class _TokenPageState extends State<TokenPage> {
                 border: Border.all(color: kOrange.withAlpha(80))),
             child: Column(mainAxisSize: MainAxisSize.min, children: [
               const Text('لوحة تحكم فاوري',
-                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: kOrange)),
+                  style: TextStyle(
+                      fontSize: 26, fontWeight: FontWeight.w900, color: kOrange)),
               const SizedBox(height: 8),
-              Text('تُفتح مرة واحدة فقط ثم تُحفظ',
+              Text('تُفتح مرة واحدة فقط ثم يُحفظ التوكن',
                   style: TextStyle(color: Colors.grey.shade400)),
               const SizedBox(height: 20),
               TextField(
@@ -184,9 +197,7 @@ class _TokenPageState extends State<TokenPage> {
                 obscureText: true,
                 textDirection: TextDirection.ltr,
                 decoration: const InputDecoration(
-                    hintText: 'ghp_...',
-                    filled: true,
-                    fillColor: kBg,
+                    hintText: 'ghp_...', filled: true, fillColor: kBg,
                     border: OutlineInputBorder()),
               ),
               const SizedBox(height: 16),
@@ -196,13 +207,15 @@ class _TokenPageState extends State<TokenPage> {
                 child: ElevatedButton(
                   style: ElevatedButton.styleFrom(
                       backgroundColor: kOrange, foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14))),
                   onPressed: () async {
                     if (_c.text.trim().isEmpty) return;
                     await GH.saveToken(_c.text.trim());
-                    setState(() {});
+                    widget.onSaved();
                   },
-                  child: const Text('دخول', style: TextStyle(fontWeight: FontWeight.w800)),
+                  child: const Text('دخول',
+                      style: TextStyle(fontWeight: FontWeight.w800)),
                 ),
               ),
             ]),
@@ -287,7 +300,8 @@ class _UsersPageState extends State<UsersPage> {
           future: _f,
           builder: (_, snap) {
             if (snap.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator(color: kOrange));
+              return const Center(
+                  child: CircularProgressIndicator(color: kOrange));
             }
             final users = snap.data ?? [];
             return ListView.separated(
@@ -305,21 +319,27 @@ class _UsersPageState extends State<UsersPage> {
                     CircleAvatar(
                         backgroundColor: kOrange.withAlpha(40),
                         child: Text(u.name.isNotEmpty ? u.name[0] : '؟',
-                            style: const TextStyle(color: kOrange, fontWeight: FontWeight.w800))),
+                            style: const TextStyle(
+                                color: kOrange, fontWeight: FontWeight.w800))),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(u.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+                          Text(u.name,
+                              style: const TextStyle(fontWeight: FontWeight.w800)),
                           const SizedBox(height: 4),
                           Text('${u.phone}  •  ${_roleLabel(u.role)}',
-                              style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+                              style: TextStyle(
+                                  color: Colors.grey.shade400, fontSize: 12)),
                         ],
                       ),
                     ),
                     Text('${u.points}',
-                        style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: kOrange)),
+                        style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            color: kOrange)),
                     const SizedBox(width: 6),
                     const Text('نقطة', style: TextStyle(color: Colors.grey)),
                     const SizedBox(width: 14),
@@ -363,9 +383,16 @@ class _AddUserDialogState extends State<AddUserDialog> {
         content: SizedBox(
           width: 380,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(controller: _name, decoration: const InputDecoration(labelText: 'الاسم')),
-            TextField(controller: _phone, decoration: const InputDecoration(labelText: 'رقم الهاتف'), keyboardType: TextInputType.phone),
-            TextField(controller: _pass, decoration: const InputDecoration(labelText: 'كلمة المرور')),
+            TextField(
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'الاسم')),
+            TextField(
+                controller: _phone,
+                decoration: const InputDecoration(labelText: 'رقم الهاتف'),
+                keyboardType: TextInputType.phone),
+            TextField(
+                controller: _pass,
+                decoration: const InputDecoration(labelText: 'كلمة المرور')),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               value: _role,
@@ -374,18 +401,23 @@ class _AddUserDialogState extends State<AddUserDialog> {
                 DropdownMenuItem(value: 'agent', child: Text('وكيل')),
                 DropdownMenuItem(value: 'tech', child: Text('فني')),
               ],
-              onChanged: (v) => setState(() => _role = v!),
+              onChanged: (v) => setState(() => _role = v ?? 'customer'),
             ),
           ]),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('إلغاء')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: kOrange, foregroundColor: Colors.black),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: kOrange, foregroundColor: Colors.black),
             onPressed: _busy
                 ? null
                 : () async {
-                    if (_name.text.trim().isEmpty || _phone.text.trim().isEmpty) return;
+                    if (_name.text.trim().isEmpty || _phone.text.trim().isEmpty) {
+                      return;
+                    }
                     setState(() => _busy = true);
                     try {
                       final users = await GH.users();
@@ -396,11 +428,13 @@ class _AddUserDialogState extends State<AddUserDialog> {
                           password: _pass.text,
                           role: _role));
                       await GH.put('assets/data/users.json',
-                          jsonEncode(users.map((u) => u.toJson()).toList()), widget.token);
+                          jsonEncode(users.map((u) => u.toJson()).toList()),
+                          widget.token);
                       if (mounted) Navigator.pop(context);
                     } catch (e) {
                       if (mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text('Error: $e')));
                         setState(() => _busy = false);
                       }
                     }
@@ -415,7 +449,8 @@ class AddPointsDialog extends StatefulWidget {
   final String token;
   final List<User> users;
   final User user;
-  const AddPointsDialog({super.key, required this.token, required this.users, required this.user});
+  const AddPointsDialog(
+      {super.key, required this.token, required this.users, required this.user});
   @override
   State<AddPointsDialog> createState() => _AddPointsDialogState();
 }
@@ -430,19 +465,26 @@ class _AddPointsDialogState extends State<AddPointsDialog> {
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(labelText: 'عدد النقاط')),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('إلغاء')),
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('إلغاء')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: kTeal, foregroundColor: Colors.black),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: kTeal, foregroundColor: Colors.black),
             onPressed: () async {
               final n = int.tryParse(_c.text) ?? 0;
               if (n == 0) return;
               widget.user.points += n;
               try {
                 await GH.put('assets/data/users.json',
-                    jsonEncode(widget.users.map((u) => u.toJson()).toList()), widget.token);
+                    jsonEncode(widget.users.map((u) => u.toJson()).toList()),
+                    widget.token);
                 if (mounted) Navigator.pop(context);
               } catch (e) {
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+                if (mounted) {
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text('Error: $e')));
+                }
               }
             },
             child: const Text('إضافة'),
@@ -472,8 +514,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
   final _pts = TextEditingController();
   bool _busy = false;
 
-  double get _total =>
-      _items.fold(0, (s, d) => s + (double.tryParse(d.price.text) ?? 0));
+  double get _total => _items.fold<double>(
+      0, (s, d) => s + (double.tryParse(d.price.text) ?? 0));
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -488,7 +530,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
                   border: Border.all(color: const Color(0xFF2A2A33))),
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 const Text('فاتورة جديدة',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: kOrange)),
+                    style: TextStyle(
+                        fontSize: 18, fontWeight: FontWeight.w900, color: kOrange)),
                 const SizedBox(height: 12),
                 FutureBuilder<List<User>>(
                   future: _usersF,
@@ -501,7 +544,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
                       hint: const Text('اختر العميل'),
                       items: users
                           .map((u) => DropdownMenuItem(
-                              value: u.id, child: Text('${u.name} (${u.phone})')))
+                              value: u.id,
+                              child: Text('${u.name} (${u.phone})')))
                           .toList(),
                       onChanged: (v) => setState(() => _userId = v),
                     );
@@ -541,7 +585,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 const SizedBox(height: 10),
                 Row(children: [
                   Text('الإجمالي: ${_total.toStringAsFixed(0)}',
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.w800)),
                   const SizedBox(width: 20),
                   const Text('النقاط: ', style: TextStyle(color: kTeal)),
                   SizedBox(
@@ -557,7 +602,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
                         backgroundColor: kOrange, foregroundColor: Colors.black),
                     onPressed: _busy ? null : _save,
                     child: _busy
-                        ? const SizedBox(width: 18, height: 18,
+                        ? const SizedBox(
+                            width: 18, height: 18,
                             child: CircularProgressIndicator(strokeWidth: 2))
                         : const Text('حفظ الفاتورة'),
                   ),
@@ -575,7 +621,9 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 if (invs.isEmpty) {
                   return const Padding(
                       padding: EdgeInsets.all(20),
-                      child: Center(child: Text('لا توجد فواتير', style: TextStyle(color: Colors.grey))));
+                      child: Center(
+                          child: Text('لا توجد فواتير',
+                              style: TextStyle(color: Colors.grey))));
                 }
                 return Column(
                   children: invs
@@ -583,34 +631,40 @@ class _InvoicesPageState extends State<InvoicesPage> {
                             margin: const EdgeInsets.only(bottom: 10),
                             padding: const EdgeInsets.all(14),
                             decoration: BoxDecoration(
-                                color: kCard, borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: const Color(0xFF2A2A33))),
+                                color: kCard,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(
+                                    color: const Color(0xFF2A2A33))),
                             child: Row(children: [
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(inv.date,
-                                        style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
+                                        style: TextStyle(
+                                            color: Colors.grey.shade400,
+                                            fontSize: 12)),
                                     const SizedBox(height: 4),
                                     Text(
-                                        inv.items
-                                            .map((e) => e.name)
-                                            .join('، '),
+                                        inv.items.map((e) => e.name).join('، '),
                                         style: const TextStyle(fontSize: 13)),
                                   ],
                                 ),
                               ),
                               Text('${inv.total.toStringAsFixed(0)}',
-                                  style: const TextStyle(fontWeight: FontWeight.w800)),
+                                  style: const TextStyle(
+                                      fontWeight: FontWeight.w800)),
                               const SizedBox(width: 14),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 5),
                                 decoration: BoxDecoration(
                                     color: kTeal.withAlpha(40),
                                     borderRadius: BorderRadius.circular(10)),
                                 child: Text('+${inv.points}',
-                                    style: const TextStyle(color: kTeal, fontWeight: FontWeight.w800)),
+                                    style: const TextStyle(
+                                        color: kTeal,
+                                        fontWeight: FontWeight.w800)),
                               ),
                             ]),
                           ))
@@ -627,7 +681,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
     final items = _items
         .where((d) => d.name.text.trim().isNotEmpty)
         .map((d) => InvoiceItem(
-            name: d.name.text.trim(), price: double.tryParse(d.price.text) ?? 0))
+            name: d.name.text.trim(),
+            price: double.tryParse(d.price.text) ?? 0))
         .toList();
     if (items.isEmpty) return;
     setState(() => _busy = true);
@@ -649,18 +704,20 @@ class _InvoicesPageState extends State<InvoicesPage> {
       await GH.put('assets/data/users.json',
           jsonEncode(users.map((e) => e.toJson()).toList()), widget.token);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم الحفظ — سيصل التحديث للجوال خلال دقائق ✅')));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('تم الحفظ — سيصل التحديث للجوال خلال دقائق ✅')));
       setState(() {
         _items.clear();
         _items.add(_Draft());
         _pts.clear();
         _busy = false;
         _invF = GH.invoices();
+        _usersF = GH.users();
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Error: $e')));
         setState(() => _busy = false);
       }
     }
@@ -689,8 +746,10 @@ class _GiftsPageState extends State<GiftsPage> {
             IconButton(
                 icon: const Icon(Icons.add_circle_outline_rounded),
                 onPressed: () async {
-                  await Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => AddGiftPage(token: widget.token)));
+                  await Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (_) => AddGiftPage(token: widget.token)));
                   setState(() => _f = GH.gifts());
                 }),
           ],
@@ -699,16 +758,21 @@ class _GiftsPageState extends State<GiftsPage> {
           future: _f,
           builder: (_, snap) {
             if (snap.connectionState != ConnectionState.done) {
-              return const Center(child: CircularProgressIndicator(color: kOrange));
+              return const Center(
+                  child: CircularProgressIndicator(color: kOrange));
             }
             final gifts = snap.data ?? [];
             if (gifts.isEmpty) {
-              return const Center(child: Text('لا توجد هدايا', style: TextStyle(color: Colors.grey)));
+              return const Center(
+                  child: Text('لا توجد هدايا',
+                      style: TextStyle(color: Colors.grey)));
             }
             return GridView.builder(
               padding: const EdgeInsets.all(20),
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3, mainAxisSpacing: 12, crossAxisSpacing: 12,
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
                   childAspectRatio: 0.8),
               itemCount: gifts.length,
               itemBuilder: (_, i) {
@@ -722,18 +786,24 @@ class _GiftsPageState extends State<GiftsPage> {
                     Expanded(
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(10),
-                        child: Image.network(
-                            '$kSite/${g.image}',
+                        child: Image.network('$kSite/assets/${g.image}',
                             fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) =>
-                                const Icon(Icons.redeem_rounded, size: 50, color: kOrange)),
+                            errorBuilder: (_, __, ___) => const Icon(
+                                Icons.redeem_rounded,
+                                size: 50,
+                                color: kOrange)),
                       ),
                     ),
                     const SizedBox(height: 6),
-                    Text(g.name, style: const TextStyle(fontWeight: FontWeight.w700),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(g.name,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis),
                     Text('${g.points} نقطة',
-                        style: const TextStyle(color: kOrange, fontSize: 12, fontWeight: FontWeight.w800)),
+                        style: const TextStyle(
+                            color: kOrange,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w800)),
                   ]),
                 );
               },
@@ -766,7 +836,8 @@ class _AddGiftPageState extends State<AddGiftPage> {
             _busy
                 ? const Padding(
                     padding: EdgeInsets.all(14),
-                    child: SizedBox(width: 20, height: 20,
+                    child: SizedBox(
+                        width: 20, height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2)))
                 : IconButton(
                     icon: const Icon(Icons.check_rounded),
@@ -820,8 +891,8 @@ class _AddGiftPageState extends State<AddGiftPage> {
           children: [
             InkWell(
               onTap: () async {
-                final f = await ImagePicker()
-                    .pickImage(source: ImageSource.gallery, imageQuality: 70);
+                final f = await ImagePicker().pickImage(
+                    source: ImageSource.gallery, imageQuality: 70);
                 if (f == null) return;
                 setState(() => _bytes = await f.readAsBytes());
               },
@@ -833,7 +904,8 @@ class _AddGiftPageState extends State<AddGiftPage> {
                 child: _bytes == null
                     ? const Center(
                         child: Column(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.add_photo_alternate_rounded, size: 44, color: kOrange),
+                          Icon(Icons.add_photo_alternate_rounded,
+                              size: 44, color: kOrange),
                           SizedBox(height: 8),
                           Text('إرفاق صورة الهدية'),
                         ]))
@@ -841,11 +913,17 @@ class _AddGiftPageState extends State<AddGiftPage> {
               ),
             ),
             const SizedBox(height: 14),
-            TextField(controller: _name, decoration: const InputDecoration(labelText: 'اسم الهدية')),
+            TextField(
+                controller: _name,
+                decoration: const InputDecoration(labelText: 'اسم الهدية')),
             const SizedBox(height: 10),
-            TextField(controller: _desc, decoration: const InputDecoration(labelText: 'الوصف')),
+            TextField(
+                controller: _desc,
+                decoration: const InputDecoration(labelText: 'الوصف')),
             const SizedBox(height: 10),
-            TextField(controller: _cat, decoration: const InputDecoration(labelText: 'القسم')),
+            TextField(
+                controller: _cat,
+                decoration: const InputDecoration(labelText: 'القسم')),
             const SizedBox(height: 10),
             TextField(
                 controller: _pts,
