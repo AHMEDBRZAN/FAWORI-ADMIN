@@ -447,8 +447,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
   bool _busy = false;
 
   Future<void> _load() async {
-    final r = await Future.wait([GH.users(), GH.invoices()]);
-    if (mounted) setState(() { _users = r[0]; _invs = r[1]; _loading = false; });
+    final users = await GH.users();
+    final invoices = await GH.invoices();
+    if (mounted) setState(() {
+      _users = users;
+      _invs = invoices;
+      _loading = false;
+    });
   }
 
   @override
@@ -460,10 +465,10 @@ class _InvoicesPageState extends State<InvoicesPage> {
   double get _total =>
       _items.fold<double>(0, (s, d) => s + (double.tryParse(d.price.text) ?? 0));
 
-  String _userName(String id) =>
-      _users.where((u) => u.id == id).map((u) => u.name).toList().isEmpty
-          ? '—'
-          : _users.where((u) => u.id == id).first.name;
+  String _userName(String id) {
+    final m = _users.where((u) => u.id == id);
+    return m.isEmpty ? '—' : m.first.name;
+  }
 
   Future<void> _deleteInv(Invoice inv) async {
     if (!await confirmDialog(context, 'حذف هذه الفاتورة؟')) return;
@@ -494,7 +499,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
                       const Text('فاتورة جديدة',
                           style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: kOrange)),
                       const SizedBox(height: 10),
-                      // بحث ذكي عن العميل
                       if (_selected == null) ...[
                         TextField(
                           onChanged: (v) => setState(() => _query = v),
@@ -538,7 +542,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
                           ]),
                         ),
                       const SizedBox(height: 12),
-                      // جدول المواد
                       Row(children: const [
                         Expanded(child: Text('المادة', style: TextStyle(fontWeight: FontWeight.w800))),
                         SizedBox(width: 100, child: Text('السعر', style: TextStyle(fontWeight: FontWeight.w800))),
@@ -577,7 +580,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
                           icon: const Icon(Icons.add_rounded, size: 18),
                           label: const Text('إضافة مادة')),
                       const SizedBox(height: 10),
-                      // جدول الملخص
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
