@@ -14,6 +14,7 @@ const Color kTeal = Color(0xFF3EC6C0);
 const Color kBg = Color(0xFF141419);
 const Color kCard = Color(0xFF1B1B21);
 const Color kLine = Color(0xFF2A2A33);
+const Color kInk = Color(0xFF23405C);
 
 String fmt(num n) {
   final s = n.toStringAsFixed(0);
@@ -71,11 +72,13 @@ class User {
 }
 
 class InvoiceItem {
-  String name; double price;
-  InvoiceItem({required this.name, required this.price});
-  factory InvoiceItem.fromJson(Map<String, dynamic> j) =>
-      InvoiceItem(name: j['name'] ?? '', price: (j['price'] as num?)?.toDouble() ?? 0);
-  Map<String, dynamic> toJson() => {'name': name, 'price': price};
+  String name; double price; int qty;
+  InvoiceItem({required this.name, required this.price, this.qty = 1});
+  factory InvoiceItem.fromJson(Map<String, dynamic> j) => InvoiceItem(
+      name: j['name'] ?? '',
+      price: (j['price'] as num?)?.toDouble() ?? 0,
+      qty: (j['qty'] as num?)?.toInt() ?? 1);
+  Map<String, dynamic> toJson() => {'name': name, 'price': price, 'qty': qty};
 }
 
 class Invoice {
@@ -122,17 +125,24 @@ class GH {
   }
 
   static Future<void> put(String path, String content, String t) async {
-    final sha = await getSha(path, t);
-    final r = await http.put(
-        Uri.parse('https://api.github.com/repos/$kOwner/$kRepo/contents/$path'),
-        headers: headers(t),
-        body: jsonEncode({
-          'message': 'Update $path (PC admin)',
-          'content': base64Encode(utf8.encode(content)),
-          if (sha != null) 'sha': sha,
-          'branch': kBranch,
-        }));
-    if (r.statusCode != 200 && r.statusCode != 201) throw Exception('PUT ${r.statusCode}');
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final sha = await getSha(path, t);
+      final r = await http.put(
+          Uri.parse('https://api.github.com/repos/$kOwner/$kRepo/contents/$path'),
+          headers: headers(t),
+          body: jsonEncode({
+            'message': 'Update $path (PC admin)',
+            'content': base64Encode(utf8.encode(content)),
+            if (sha != null) 'sha': sha,
+            'branch': kBranch,
+          }));
+      if (r.statusCode == 200 || r.statusCode == 201) return;
+      if (r.statusCode == 409 && attempt < 2) {
+        await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+        continue;
+      }
+      throw Exception('PUT ${r.statusCode}');
+    }
   }
 
   static Future<String> getContent(String path, String t) async {
