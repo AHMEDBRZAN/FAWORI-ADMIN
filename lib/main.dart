@@ -165,34 +165,30 @@ class UsersPage extends StatefulWidget {
 }
 
 class _UsersPageState extends State<UsersPage> {
-  List<User> _users = [];
   bool _loading = true;
-
-  Future<void> _load() async {
-    final u = await GH.users();
-    if (mounted) setState(() { _users = u; _loading = false; });
-  }
 
   @override
   void initState() {
     super.initState();
-    _load();
+    _init();
   }
+
+  Future<void> _init() async {
+    if (!Store.loaded) await Store.load();
+    if (mounted) setState(() => _loading = false);
+  }
+
+  List<User> get _users => Store.users;
 
   String _roleLabel(String r) =>
       r == 'agent' ? 'وكيل' : r == 'tech' ? 'فني' : r == 'admin' ? 'مدير' : 'عميل';
 
-  Future<void> _saveUsers() async {
-    await GH.put('assets/data/users.json',
-        jsonEncode(_users.map((u) => u.toJson()).toList()), widget.token);
-  }
-
   Future<void> _delete(User u) async {
     if (!await confirmDialog(context, 'حذف المستخدم "${u.name}"؟')) return;
-    _users.remove(u);
+    Store.users.remove(u);
     setState(() {});
     try {
-      await _saveUsers();
+      await Store.saveUsers(widget.token);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('تم الحذف والحفظ ✅')));
@@ -225,7 +221,7 @@ class _UsersPageState extends State<UsersPage> {
     u.points += n;
     setState(() {});
     try {
-      await _saveUsers();
+      await Store.saveUsers(widget.token);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('أُضيفت $n نقطة لـ ${u.name} ✅')));
@@ -240,8 +236,13 @@ class _UsersPageState extends State<UsersPage> {
         appBar: AppBar(
           title: const Text('المستخدمون'),
           actions: [
-            IconButton(icon: const Icon(Icons.refresh_rounded),
-                onPressed: () => setState(() { _loading = true; _load(); })),
+            IconButton(
+                icon: const Icon(Icons.refresh_rounded),
+                onPressed: () async {
+                  setState(() => _loading = true);
+                  await Store.load();
+                  if (mounted) setState(() => _loading = false);
+                }),
             IconButton(
                 icon: const Icon(Icons.person_add_alt_1_rounded),
                 onPressed: () async {
@@ -422,8 +423,7 @@ class _UserDialogState extends State<UserDialog> {
           ..marital = _marital
           ..car = _car;
       }
-      await GH.put('assets/data/users.json',
-          jsonEncode(widget.users.map((u) => u.toJson()).toList()), widget.token);
+      await Store.saveUsers(widget.token);
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('تم الحفظ ✅')));
@@ -454,8 +454,6 @@ class InvoicesPage extends StatefulWidget {
 }
 
 class _InvoicesPageState extends State<InvoicesPage> {
-  List<User> _users = [];
-  List<Invoice> _invs = [];
   bool _loading = true;
   ExcelData? _xl;
   bool _refreshing = false;
@@ -466,6 +464,9 @@ class _InvoicesPageState extends State<InvoicesPage> {
   final List<_Draft> _items = [_Draft()];
   final _pts = TextEditingController();
   bool _busy = false;
+
+  List<User> get _users => Store.users;
+  List<Invoice> get _invs => Store.invoices;
 
   bool get _isReturn => _fetchedType.contains('مرتجع');
 
@@ -482,16 +483,15 @@ class _InvoicesPageState extends State<InvoicesPage> {
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  Future<void> _load() async {
-    final users = await GH.users();
-    final invoices = await GH.invoices();
-    if (mounted) setState(() { _users = users; _invs = invoices; _loading = false; });
-  }
-
   @override
   void initState() {
     super.initState();
-    _load();
+    _init();
+  }
+
+  Future<void> _init() async {
+    if (!Store.loaded) await Store.load();
+    if (mounted) setState(() => _loading = false);
   }
 
   Future<void> _refresh() async {
@@ -574,13 +574,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
     if (owner.isNotEmpty) {
       owner.first.points = (owner.first.points - inv.points).clamp(0, 1000000000);
     }
-    _invs.remove(inv);
+    Store.invoices.remove(inv);
     setState(() {});
     try {
-      await GH.put('assets/data/invoices.json',
-          jsonEncode(_invs.map((e) => e.toJson()).toList()), widget.token);
-      await GH.put('assets/data/users.json',
-          jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
+      await Store.saveInvoices(widget.token);
+      await Store.saveUsers(widget.token);
       if (mounted) _snack('تم الحذف وعكس النقاط ✅');
     } catch (e) {
       if (mounted) _snack('Error: $e');
@@ -628,10 +626,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
     inv.points = newSigned;
     setState(() {});
     try {
-      await GH.put('assets/data/invoices.json',
-          jsonEncode(_invs.map((e) => e.toJson()).toList()), widget.token);
-      await GH.put('assets/data/users.json',
-          jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
+      await Store.saveInvoices(widget.token);
+      await Store.saveUsers(widget.token);
       if (mounted) _snack('تم تعديل الفاتورة وتحديث النقاط ✅');
     } catch (e) {
       if (mounted) _snack('Error: $e');
@@ -645,7 +641,22 @@ class _InvoicesPageState extends State<InvoicesPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('الفواتير والنقاط')),
+        appBar: AppBar(
+          title: const Text('الفواتير والنقاط'),
+          actions: [
+            IconButton(
+                tooltip: 'رفع ملف اكسل جديد',
+                icon: const Icon(Icons.upload_file_rounded),
+                onPressed: _refreshing ? null : _upload),
+            IconButton(
+                tooltip: 'تحديث الملف من المستودع',
+                icon: _refreshing
+                    ? const SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
+                    : const Icon(Icons.sync_rounded, color: kTeal),
+                onPressed: _refreshing ? null : _refresh),
+          ],
+        ),
         body: _loading
             ? const Center(child: CircularProgressIndicator(color: kOrange))
             : ListView(
@@ -983,7 +994,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     try {
       final points = int.tryParse(_pts.text) ?? _sumPoints;
       final signed = _isReturn ? -points : points;
-      _invs.add(Invoice(
+      Store.invoices.add(Invoice(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           userId: _selected!.id,
           date: DateTime.now().toString().substring(0, 10),
@@ -992,14 +1003,12 @@ class _InvoicesPageState extends State<InvoicesPage> {
           points: signed,
           items: items));
       _selected!.points = (_selected!.points + signed).clamp(0, 1000000000);
-      await GH.put('assets/data/invoices.json',
-          jsonEncode(_invs.map((e) => e.toJson()).toList()), widget.token);
-      await GH.put('assets/data/users.json',
-          jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
+      await Store.saveInvoices(widget.token);
+      await Store.saveUsers(widget.token);
       if (!mounted) return;
       _snack(_isReturn
           ? 'تم حفظ المرتجع وخصم $points نقطة ✅'
-          : 'تم حفظ الفاتورة وإضافة $points نقطة ✅');
+          : 'تم حفظ الفاتورة وإضافة $points نقطة للعميل ✅');
       setState(() {
         _items.clear();
         _items.add(_Draft());
@@ -1016,156 +1025,4 @@ class _InvoicesPageState extends State<InvoicesPage> {
       }
     }
   }
-}
-
-// ================= الأكواد (جوال + كمبيوتر) =================
-class CodeFilesPage extends StatelessWidget {
-  final String token;
-  const CodeFilesPage({super.key, required this.token});
-
-  static const List<String> mobileFiles = [
-    'lib/main.dart',
-    'lib/core/app_settings.dart',
-    'lib/core/strings.dart',
-    'lib/core/theme.dart',
-    'lib/core/store_service.dart',
-    'lib/core/gifts_service.dart',
-    'lib/screens/login_screen.dart',
-    'lib/screens/main_screen.dart',
-    'lib/screens/home_screen.dart',
-    'lib/screens/products_screen.dart',
-    'lib/screens/settings_screen.dart',
-    'lib/screens/simple_screens.dart',
-    'lib/screens/about_screen.dart',
-    'lib/widgets/bottom_nav.dart',
-    'lib/widgets/gifts_view.dart',
-    'lib/widgets/pressable.dart',
-    'lib/widgets/fawori_logo.dart',
-    'pubspec.yaml',
-    'web/index.html',
-  ];
-
-  static const List<String> adminFiles = [
-    'lib/main.dart',
-    'lib/data.dart',
-    'lib/excel_service.dart',
-    'lib/extra.dart',
-    'pubspec.yaml',
-    'web/index.html',
-  ];
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('الأكواد')),
-        body: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            const Text('📱 أكواد تطبيق الجوال (FAWORI)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kTeal)),
-            const SizedBox(height: 10),
-            ...mobileFiles.map((f) => _tile(context, f, kRepo)),
-            const SizedBox(height: 24),
-            const Text('🖥️ أكواد تطبيق الكمبيوتر (FAWORI-ADMIN)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kOrange)),
-            const SizedBox(height: 10),
-            ...adminFiles.map((f) => _tile(context, f, kAdminRepo)),
-          ],
-        ),
-      );
-
-  Widget _tile(BuildContext context, String path, String repo) => Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        child: ListTile(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          tileColor: kCard,
-          leading: const Icon(Icons.description_outlined, color: kOrange),
-          title: Text(path, textDirection: TextDirection.ltr,
-              style: const TextStyle(fontSize: 13)),
-          trailing: const Icon(Icons.edit_rounded, color: kTeal, size: 18),
-          onTap: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => CodeEditor(path: path, token: token, repo: repo))),
-        ),
-      );
-}
-
-class CodeEditor extends StatefulWidget {
-  final String path;
-  final String token;
-  final String repo;
-  const CodeEditor({super.key, required this.path, required this.token, required this.repo});
-  @override
-  State<CodeEditor> createState() => _CodeEditorState();
-}
-
-class _CodeEditorState extends State<CodeEditor> {
-  final _c = TextEditingController();
-  bool _loading = true;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final t = await GH.getContent(widget.path, widget.token, widget.repo);
-      if (mounted) setState(() { _c.text = t; _loading = false; });
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  Future<void> _save() async {
-    setState(() => _saving = true);
-    try {
-      await GH.put(widget.path, _c.text, widget.token, widget.repo);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('تم الحفظ ✅ — سيُعاد البناء خلال دقائق')));
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: Text('${widget.repo == kAdminRepo ? '🖥️' : '📱'} ${widget.path}',
-              textDirection: TextDirection.ltr,
-              style: const TextStyle(fontSize: 14)),
-          actions: [
-            _saving
-                ? const Padding(padding: EdgeInsets.all(14),
-                    child: SizedBox(width: 20, height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2)))
-                : IconButton(icon: const Icon(Icons.cloud_upload_outlined), onPressed: _save),
-          ],
-        ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator(color: kOrange))
-            : Padding(
-                padding: const EdgeInsets.all(12),
-                child: Container(
-                  decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(12)),
-                  padding: const EdgeInsets.all(12),
-                  child: TextField(
-                    controller: _c,
-                    maxLines: null,
-                    expands: true,
-                    textDirection: TextDirection.ltr,
-                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-                    decoration: const InputDecoration(
-                        border: InputBorder.none, contentPadding: EdgeInsets.zero),
-                  ),
-                ),
-              ),
-      );
 }
