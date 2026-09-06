@@ -427,6 +427,7 @@ class _UserDialogState extends State<UserDialog> {
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
+  final TextEditingController qty = TextEditingController(text: '1');
 }
 
 class InvoicesPage extends StatefulWidget {
@@ -445,15 +446,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
   final List<_Draft> _items = [_Draft()];
   final _pts = TextEditingController();
   bool _busy = false;
+  late final String _invNo =
+      '${DateTime.now().millisecondsSinceEpoch % 90000 + 10000}';
 
   Future<void> _load() async {
     final users = await GH.users();
     final invoices = await GH.invoices();
-    if (mounted) setState(() {
-      _users = users;
-      _invs = invoices;
-      _loading = false;
-    });
+    if (mounted) setState(() { _users = users; _invs = invoices; _loading = false; });
   }
 
   @override
@@ -462,20 +461,26 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _load();
   }
 
-  double get _total =>
-      _items.fold<double>(0, (s, d) => s + (double.tryParse(d.price.text) ?? 0));
-
-  String _userName(String id) {
-    final m = _users.where((u) => u.id == id);
-    return m.isEmpty ? '—' : m.first.name;
-  }
+  double get _total => _items.fold<double>(
+      0,
+      (s, d) =>
+          s +
+          (double.tryParse(d.price.text) ?? 0) *
+              (int.tryParse(d.qty.text) ?? 0));
 
   Future<void> _deleteInv(Invoice inv) async {
-    if (!await confirmDialog(context, 'حذف هذه الفاتورة؟')) return;
+    if (!await confirmDialog(context, 'حذف الفاتورة وخصم نقاطها من العميل؟')) return;
     try {
       final list = _invs.where((x) => x.id != inv.id).toList();
+      final owner = _users.where((x) => x.id == inv.userId).toList();
+      if (owner.isNotEmpty) {
+        owner.first.points =
+            (owner.first.points - inv.points).clamp(0, 1000000000);
+      }
       await GH.put('assets/data/invoices.json',
           jsonEncode(list.map((e) => e.toJson()).toList()), widget.token);
+      await GH.put('assets/data/users.json',
+          jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
       setState(() => _invs = list);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -490,151 +495,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
             : ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                        color: kCard, borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: kLine)),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Text('فاتورة جديدة',
-                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: kOrange)),
-                      const SizedBox(height: 10),
-                      if (_selected == null) ...[
-                        TextField(
-                          onChanged: (v) => setState(() => _query = v),
-                          decoration: const InputDecoration(
-                              labelText: 'ابحث باسم العميل أو رقمه...', isDense: true),
-                        ),
-                        if (_query.trim().isNotEmpty)
-                          Container(
-                            constraints: const BoxConstraints(maxHeight: 160),
-                            child: ListView(
-                              children: _users
-                                  .where((u) =>
-                                      u.name.contains(_query) || u.phone.contains(_query))
-                                  .map((u) => ListTile(
-                                        dense: true,
-                                        title: Text(u.name),
-                                        subtitle: Text(u.phone,
-                                            style: const TextStyle(fontSize: 11)),
-                                        onTap: () =>
-                                            setState(() { _selected = u; _query = ''; }),
-                                      ))
-                                  .toList(),
-                            ),
-                          ),
-                      ] else
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                          decoration: BoxDecoration(
-                              color: kTeal.withAlpha(30),
-                              borderRadius: BorderRadius.circular(10)),
-                          child: Row(mainAxisSize: MainAxisSize.min, children: [
-                            Text(_selected!.name,
-                                style: const TextStyle(fontWeight: FontWeight.w800)),
-                            const SizedBox(width: 6),
-                            Text('(${fmt(_selected!.points)} نقطة)',
-                                style: const TextStyle(fontSize: 12, color: kTeal)),
-                            const SizedBox(width: 8),
-                            InkWell(
-                                onTap: () => setState(() => _selected = null),
-                                child: const Icon(Icons.close_rounded, size: 16)),
-                          ]),
-                        ),
-                      const SizedBox(height: 12),
-                      Row(children: const [
-                        Expanded(child: Text('المادة', style: TextStyle(fontWeight: FontWeight.w800))),
-                        SizedBox(width: 100, child: Text('السعر', style: TextStyle(fontWeight: FontWeight.w800))),
-                        SizedBox(width: 40),
-                      ]),
-                      const Divider(),
-                      ..._items.map((d) => Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Row(children: [
-                              Expanded(child: TextField(
-                                  controller: d.name,
-                                  decoration: const InputDecoration(isDense: true))),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 100,
-                                child: TextField(
-                                    controller: d.price,
-                                    keyboardType: TextInputType.number,
-                                    decoration: const InputDecoration(isDense: true),
-                                    onChanged: (_) => setState(() {})),
-                              ),
-                              SizedBox(
-                                width: 40,
-                                child: IconButton(
-                                    padding: EdgeInsets.zero,
-                                    icon: const Icon(Icons.delete_outline_rounded,
-                                        color: Colors.red, size: 18),
-                                    onPressed: _items.length > 1
-                                        ? () => setState(() => _items.remove(d))
-                                        : null),
-                              ),
-                            ]),
-                          )),
-                      TextButton.icon(
-                          onPressed: () => setState(() => _items.add(_Draft())),
-                          icon: const Icon(Icons.add_rounded, size: 18),
-                          label: const Text('إضافة مادة')),
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                            color: kBg, borderRadius: BorderRadius.circular(12)),
-                        child: Column(children: [
-                          Row(children: [
-                            const Text('الإجمالي'),
-                            const Spacer(),
-                            Text(fmt(_total),
-                                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-                          ]),
-                          const Divider(),
-                          Row(children: [
-                            const Text('نقاط هذه الفاتورة'),
-                            const Spacer(),
-                            SizedBox(
-                              width: 90,
-                              child: TextField(
-                                  controller: _pts,
-                                  keyboardType: TextInputType.number,
-                                  decoration: InputDecoration(
-                                      isDense: true,
-                                      hintText: '${_total.round()}'),
-                                  onChanged: (_) => setState(() {})),
-                            ),
-                          ]),
-                          const Divider(),
-                          Row(children: [
-                            const Text('رصيد العميل بعد الحفظ'),
-                            const Spacer(),
-                            Text(
-                                fmt((_selected?.points ?? 0) +
-                                    (int.tryParse(_pts.text) ?? _total.round())),
-                                style: const TextStyle(color: kTeal, fontWeight: FontWeight.w900)),
-                          ]),
-                        ]),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        height: 46,
-                        child: ElevatedButton(
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: kOrange, foregroundColor: Colors.black,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                          onPressed: _busy ? null : _save,
-                          child: _busy
-                              ? const SizedBox(width: 18, height: 18,
-                                  child: CircularProgressIndicator(strokeWidth: 2))
-                              : const Text('حفظ الفاتورة', style: TextStyle(fontWeight: FontWeight.w800)),
-                        ),
-                      ),
-                    ]),
-                  ),
-                  const SizedBox(height: 20),
+                  _invoiceCard(),
+                  const SizedBox(height: 24),
                   const Text('آخر الفواتير',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 10),
@@ -652,7 +514,10 @@ class _InvoicesPageState extends State<InvoicesPage> {
                                 Text('${_userName(inv.userId)}  •  ${inv.date}',
                                     style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
                                 const SizedBox(height: 4),
-                                Text(inv.items.map((e) => e.name).join('، '),
+                                Text(
+                                    inv.items
+                                        .map((e) => '${e.name} ×${e.qty}')
+                                        .join('، '),
                                     style: const TextStyle(fontSize: 13)),
                               ],
                             ),
@@ -678,12 +543,202 @@ class _InvoicesPageState extends State<InvoicesPage> {
               ),
       );
 
+  String _userName(String id) {
+    final m = _users.where((u) => u.id == id);
+    return m.isEmpty ? '—' : m.first.name;
+  }
+
+  Widget _invoiceCard() => Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+            color: Colors.white, borderRadius: BorderRadius.circular(18)),
+        child: Column(children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.network('$kSite/assets/assets/images/logo.png',
+                  width: 74, height: 74, fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.store_rounded, size: 50, color: kOrange)),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Text('شركة فاوري',
+                    style: TextStyle(color: kInk, fontSize: 20, fontWeight: FontWeight.w900)),
+                const Text('Fawori Company',
+                    style: TextStyle(color: Colors.grey, fontSize: 11)),
+                const SizedBox(height: 10),
+                Text('فاتورة إلي: ${_selected?.name ?? '..........................'}',
+                    style: const TextStyle(color: kInk, fontSize: 12, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 4),
+                Text('رقم الهاتف: ${_selected?.phone ?? '..........................'}',
+                    style: const TextStyle(color: kInk, fontSize: 12, fontWeight: FontWeight.w700)),
+              ]),
+            ),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              const Text('فـــاتورة',
+                  style: TextStyle(color: kInk, fontSize: 26, fontWeight: FontWeight.w900)),
+              const SizedBox(height: 6),
+              Text('التاريخ: ${DateTime.now().toString().substring(0, 10)}',
+                  style: const TextStyle(color: kInk, fontSize: 11)),
+              const SizedBox(height: 4),
+              Text('رقم الفاتورة: $_invNo',
+                  style: const TextStyle(color: kInk, fontSize: 11)),
+            ]),
+          ]),
+          const SizedBox(height: 14),
+          if (_selected == null) ...[
+            TextField(
+              onChanged: (v) => setState(() => _query = v),
+              style: const TextStyle(color: kInk),
+              decoration: InputDecoration(
+                  labelText: 'ابحث باسم العميل أو رقمه...',
+                  filled: true,
+                  fillColor: const Color(0xFFF4F6F8)),
+            ),
+            if (_query.trim().isNotEmpty)
+              Container(
+                constraints: const BoxConstraints(maxHeight: 170),
+                color: const Color(0xFFF4F6F8),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: _users
+                      .where((u) =>
+                          u.name.contains(_query) || u.phone.contains(_query))
+                      .map((u) => ListTile(
+                            dense: true,
+                            title: Text(u.name, style: const TextStyle(color: kInk)),
+                            subtitle: Text(u.phone, style: const TextStyle(fontSize: 11)),
+                            onTap: () =>
+                                setState(() { _selected = u; _query = ''; }),
+                          ))
+                      .toList(),
+                ),
+              ),
+          ] else
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => setState(() => _selected = null),
+                child: const Text('تغيير العميل'),
+              ),
+            ),
+          const SizedBox(height: 12),
+          Container(
+            color: kOrange,
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(children: const [
+              SizedBox(width: 34, child: Center(child: Text('NO', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
+              Expanded(child: Center(child: Text('اسم الصنف', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
+              SizedBox(width: 74, child: Center(child: Text('سعر القطعة', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
+              SizedBox(width: 52, child: Center(child: Text('العدد', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
+              SizedBox(width: 74, child: Center(child: Text('المجموع', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
+            ]),
+          ),
+          ...List.generate(_items.length, (i) => _row(i, _items[i])),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => setState(() => _items.add(_Draft())),
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('إضافة خانة'),
+            ),
+          ),
+          const Divider(),
+          Row(children: [
+            const Text('التكلفة الإجمالية',
+                style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+            const Spacer(),
+            Text(fmt(_total),
+                style: const TextStyle(color: kInk, fontSize: 18, fontWeight: FontWeight.w900)),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            const Text('نقاط هذه الفاتورة',
+                style: TextStyle(color: kInk, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            SizedBox(
+              width: 90,
+              child: TextField(
+                  controller: _pts,
+                  keyboardType: TextInputType.number,
+                  style: const TextStyle(color: kInk),
+                  decoration: InputDecoration(
+                      isDense: true, hintText: '${_total.round()}'),
+                  onChanged: (_) => setState(() {})),
+            ),
+          ]),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kOrange, foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              onPressed: _busy ? null : _save,
+              child: _busy
+                  ? const SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('حفظ الفاتورة', style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
+          ),
+        ]),
+      );
+
+  Widget _row(int i, _Draft d) {
+    final price = double.tryParse(d.price.text) ?? 0;
+    final qty = int.tryParse(d.qty.text) ?? 0;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        SizedBox(width: 34, child: Center(child: Text('${i + 1}', style: const TextStyle(color: kInk)))),
+        const SizedBox(width: 6),
+        Expanded(
+            child: TextField(
+                controller: d.name,
+                style: const TextStyle(color: kInk),
+                decoration: const InputDecoration(isDense: true))),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 74,
+          child: TextField(
+              controller: d.price,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: kInk),
+              decoration: const InputDecoration(isDense: true),
+              onChanged: (_) => setState(() {})),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 52,
+          child: TextField(
+              controller: d.qty,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: kInk),
+              decoration: const InputDecoration(isDense: true),
+              onChanged: (_) => setState(() {})),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 74,
+          child: Center(
+              child: Text(fmt(price * qty),
+                  style: const TextStyle(color: kInk, fontWeight: FontWeight.w700))),
+        ),
+      ]),
+    );
+  }
+
   Future<void> _save() async {
     if (_selected == null) return;
     final items = _items
         .where((d) => d.name.text.trim().isNotEmpty)
         .map((d) => InvoiceItem(
-            name: d.name.text.trim(), price: double.tryParse(d.price.text) ?? 0))
+            name: d.name.text.trim(),
+            price: double.tryParse(d.price.text) ?? 0,
+            qty: int.tryParse(d.qty.text) ?? 1))
         .toList();
     if (items.isEmpty) return;
     setState(() => _busy = true);
