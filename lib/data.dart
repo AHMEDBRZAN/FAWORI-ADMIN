@@ -184,3 +184,25 @@ class GH {
   static Future<List<Invoice>> invoices() => _load('invoices.json', Invoice.fromJson);
   static Future<List<Gift>> gifts() => _load('gifts.json', Gift.fromJson);
 }
+
+/// مخزن موحّد: كل الصفحات تقرأ وتكتب من نفس القائمة داخل الجلسة
+class Store {
+  static List<User> users = [];
+  static List<Invoice> invoices = [];
+  static bool loaded = false;
+
+  static Future<void> load() async {
+    final r = await Future.wait([GH.users(), GH.invoices()]);
+    users = r[0];
+    invoices = r[1];
+    loaded = true;
+  }
+
+  static Future<void> saveUsers(String token) => GH.put('assets/data/users.json',
+      jsonEncode(users.map((u) => u.toJson()).toList()), token);
+
+  static Future<void> saveInvoices(String token) => GH.put(
+      'assets/data/invoices.json',
+      jsonEncode(invoices.map((e) => e.toJson()).toList()),
+      token);
+}
