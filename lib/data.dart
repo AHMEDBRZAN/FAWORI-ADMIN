@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const String kOwner = 'AHMEDBRZAN';
 const String kRepo = 'FAWORI';
+const String kAdminRepo = 'FAWORI-ADMIN';
 const String kBranch = 'main';
 const String kSite = 'https://ahmedbrzan.github.io/FAWORI';
 
@@ -82,9 +83,13 @@ class InvoiceItem {
 }
 
 class Invoice {
-  String id, userId, date, type; double total; int points; List<InvoiceItem> items;
+  String id, userId, date, type;
+  double total;
+  int points;
+  List<InvoiceItem> items;
   Invoice({required this.id, required this.userId, required this.date,
-      required this.total, required this.points, required this.items, this.type = 'sale'});
+      required this.total, required this.points, required this.items,
+      this.type = 'sale'});
   factory Invoice.fromJson(Map<String, dynamic> j) => Invoice(
       id: '${j['id'] ?? ''}', userId: '${j['userId'] ?? ''}', date: j['date'] ?? '',
       type: j['type'] ?? 'sale',
@@ -118,19 +123,20 @@ class GH {
   static Map<String, String> headers(String t) =>
       {'Authorization': 'Bearer $t', 'Accept': 'application/vnd.github+json'};
 
-  static Future<String?> getSha(String path, String t) async {
+  static Future<String?> getSha(String path, String t, [String repo = kRepo]) async {
     final r = await http.get(
-        Uri.parse('https://api.github.com/repos/$kOwner/$kRepo/contents/$path?ref=$kBranch'),
+        Uri.parse('https://api.github.com/repos/$kOwner/$repo/contents/$path?ref=$kBranch'),
         headers: headers(t));
     if (r.statusCode != 200) return null;
     return jsonDecode(r.body)['sha'] as String?;
   }
 
-  static Future<void> putBinary(String path, List<int> bytes, String t) async {
+  static Future<void> putBinary(String path, List<int> bytes, String t,
+      [String repo = kRepo]) async {
     for (var attempt = 0; attempt < 3; attempt++) {
-      final sha = await getSha(path, t);
+      final sha = await getSha(path, t, repo);
       final r = await http.put(
-          Uri.parse('https://api.github.com/repos/$kOwner/$kRepo/contents/$path'),
+          Uri.parse('https://api.github.com/repos/$kOwner/$repo/contents/$path'),
           headers: headers(t),
           body: jsonEncode({
             'message': 'Update $path (PC admin)',
@@ -147,21 +153,25 @@ class GH {
     }
   }
 
-  static Future<void> put(String path, String content, String t) =>
-      putBinary(path, utf8.encode(content), t);
+  static Future<void> put(String path, String content, String t,
+          [String repo = kRepo]) =>
+      putBinary(path, utf8.encode(content), t, repo);
 
-  static Future<String> getContent(String path, String t) async {
+  static Future<String> getContent(String path, String t,
+      [String repo = kRepo]) async {
     final r = await http.get(
-        Uri.parse('https://api.github.com/repos/$kOwner/$kRepo/contents/$path?ref=$kBranch'),
+        Uri.parse('https://api.github.com/repos/$kOwner/$repo/contents/$path?ref=$kBranch'),
         headers: headers(t));
     if (r.statusCode != 200) throw Exception('GET ${r.statusCode}');
     final b64 = (jsonDecode(r.body)['content'] as String).replaceAll('\n', '');
     return utf8.decode(base64Decode(b64));
   }
 
-  static Future<List<T>> _load<T>(String file, T Function(Map<String, dynamic>) f) async {
+  static Future<List<T>> _load<T>(
+      String file, T Function(Map<String, dynamic>) f) async {
     try {
-      final r = await http.get(Uri.parse('$kSite/assets/assets/data/$file'));
+      final r = await http.get(Uri.parse(
+          '$kSite/assets/assets/data/$file?t=${DateTime.now().millisecondsSinceEpoch}'));
       if (r.statusCode != 200) return [];
       return (jsonDecode(r.body) as List<dynamic>)
           .map((e) => f(e as Map<String, dynamic>)).toList();
