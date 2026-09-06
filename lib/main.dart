@@ -1,8 +1,11 @@
 import 'dart:convert';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import 'data.dart';
+import 'excel_service.dart';
 import 'extra.dart';
 
 void main() => runApp(const AdminApp());
@@ -179,16 +182,12 @@ class _UsersPageState extends State<UsersPage> {
   String _roleLabel(String r) =>
       r == 'agent' ? 'وكيل' : r == 'tech' ? 'فني' : r == 'admin' ? 'مدير' : 'عميل';
 
-  Future<void> _saveUsers(List<User> list) async {
-    await GH.put('assets/data/users.json',
-        jsonEncode(list.map((u) => u.toJson()).toList()), widget.token);
-  }
-
   Future<void> _delete(User u) async {
     if (!await confirmDialog(context, 'حذف المستخدم "${u.name}"؟')) return;
     try {
       final list = _users.where((x) => x.id != u.id).toList();
-      await _saveUsers(list);
+      await GH.put('assets/data/users.json',
+          jsonEncode(list.map((u) => u.toJson()).toList()), widget.token);
       setState(() => _users = list);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -217,7 +216,8 @@ class _UsersPageState extends State<UsersPage> {
     if (n == null || n == 0) return;
     try {
       u.points += n;
-      await _saveUsers(_users);
+      await GH.put('assets/data/users.json',
+          jsonEncode(_users.map((u) => u.toJson()).toList()), widget.token);
       setState(() {});
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -423,11 +423,12 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير =================
+// ================= الفواتير + الاكسل =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
   final TextEditingController qty = TextEditingController(text: '1');
+  final TextEditingController points = TextEditingController(text: '0');
 }
 
 class InvoicesPage extends StatefulWidget {
@@ -441,13 +442,30 @@ class _InvoicesPageState extends State<InvoicesPage> {
   List<User> _users = [];
   List<Invoice> _invs = [];
   bool _loading = true;
-  String _query = '';
+  ExcelData? _xl;
+  bool _refreshing = false;
+  final _invNo = TextEditingController();
+  String _fetchedType = '';
   User? _selected;
+  String _query = '';
   final List<_Draft> _items = [_Draft()];
   final _pts = TextEditingController();
   bool _busy = false;
-  late final String _invNo =
-      '${DateTime.now().millisecondsSinceEpoch % 90000 + 10000}';
+
+  bool get _isReturn => _fetchedType.contains('مرتجع');
+
+  double get _total => _items.fold<double>(
+      0,
+      (s, d) =>
+          s +
+          (double.tryParse(d.price.text) ?? 0) *
+              (int.tryParse(d.qty.text) ?? 0));
+
+  int get _sumPoints =>
+      _items.fold<int>(0, (s, d) => s + (int.tryParse(d.points.text) ?? 0));
+
+  void _snack(String m) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
   Future<void> _load() async {
     final users = await GH.users();
@@ -461,21 +479,87 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _load();
   }
 
-  double get _total => _items.fold<double>(
-      0,
-      (s, d) =>
-          s +
-          (double.tryParse(d.price.text) ?? 0) *
-              (int.tryParse(d.qty.text) ?? 0));
+  Future<void> _refresh() async {
+    setState(() => _refreshing = true);
+    try {
+      final r = await http.get(Uri.parse(
+          '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}'));
+      if (r.statusCode != 200) {
+        throw Exception('الملف غير موجود — ارفعه أولاً بزر رفع اكسل');
+      }
+      final data = parseFaworiExcel(r.bodyBytes);
+      if (mounted) {
+        setState(() => _xl = data);
+        _snack('تم التحديث ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
+      }
+    } catch (e) {
+      if (mounted) _snack('Error: $e');
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _upload() async {
+    final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
+    if (res == null || res.files.isEmpty) return;
+    final bytes = res.files.first.bytes;
+    if (bytes == null) return;
+    setState(() => _refreshing = true);
+    try {
+      await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
+      final data = parseFaworiExcel(bytes);
+      if (mounted) {
+        setState(() => _xl = data);
+        _snack('تم رفع الملف للمستودع وتحليله ✅');
+      }
+    } catch (e) {
+      if (mounted) _snack('Error: $e');
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  void _fetch() {
+    if (_xl == null) {
+      _snack('اضغط زر التحديث 🔄 أولاً لجلب ملف الاكسل');
+      return;
+    }
+    final no = _invNo.text.trim();
+    if (no.isEmpty) return;
+    final match = _xl!.invoices.where((i) => i.no.trim() == no).toList();
+    if (match.isEmpty) {
+      _snack('لا توجد فاتورة بالرقم $no');
+      return;
+    }
+    final f = match.first;
+    final fawori = f.items.where((it) => _xl!.isFawori(it.code, it.name)).toList();
+    setState(() {
+      _fetchedType = f.type.isEmpty ? 'مبيع' : f.type;
+      _items.clear();
+      for (final it in fawori) {
+        final d = _Draft();
+        d.name.text = it.name;
+        d.price.text = it.price == it.price.roundToDouble()
+            ? it.price.toStringAsFixed(0)
+            : it.price.toStringAsFixed(2);
+        d.qty.text = '${it.qty}';
+        d.points.text = '${it.qty}';
+        _items.add(d);
+      }
+      if (_items.isEmpty) _items.add(_Draft());
+      _pts.clear();
+    });
+    _snack('تم جلب ${fawori.length} مادة فاوري (${_isReturn ? 'مرتجع — تُخصم النقاط' : 'مبيع — تُضاف النقاط'})');
+  }
 
   Future<void> _deleteInv(Invoice inv) async {
-    if (!await confirmDialog(context, 'حذف الفاتورة وخصم نقاطها من العميل؟')) return;
+    if (!await confirmDialog(context, 'حذف الفاتورة وعكس نقاطها من العميل؟')) return;
     try {
       final list = _invs.where((x) => x.id != inv.id).toList();
       final owner = _users.where((x) => x.id == inv.userId).toList();
       if (owner.isNotEmpty) {
-        owner.first.points =
-            (owner.first.points - inv.points).clamp(0, 1000000000);
+        owner.first.points = (owner.first.points - inv.points).clamp(0, 1000000000);
       }
       await GH.put('assets/data/invoices.json',
           jsonEncode(list.map((e) => e.toJson()).toList()), widget.token);
@@ -483,13 +567,33 @@ class _InvoicesPageState extends State<InvoicesPage> {
           jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
       setState(() => _invs = list);
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      if (mounted) _snack('Error: $e');
     }
+  }
+
+  String _userName(String id) {
+    final m = _users.where((u) => u.id == id);
+    return m.isEmpty ? '—' : m.first.name;
   }
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('الفواتير والنقاط')),
+        appBar: AppBar(
+          title: const Text('الفواتير والنقاط'),
+          actions: [
+            IconButton(
+                tooltip: 'رفع ملف اكسل جديد',
+                icon: const Icon(Icons.upload_file_rounded),
+                onPressed: _refreshing ? null : _upload),
+            IconButton(
+                tooltip: 'تحديث الملف من المستودع',
+                icon: _refreshing
+                    ? const SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
+                    : const Icon(Icons.sync_rounded, color: kTeal),
+                onPressed: _refreshing ? null : _refresh),
+          ],
+        ),
         body: _loading
             ? const Center(child: CircularProgressIndicator(color: kOrange))
             : ListView(
@@ -515,9 +619,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                                     style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
                                 const SizedBox(height: 4),
                                 Text(
-                                    inv.items
-                                        .map((e) => '${e.name} ×${e.qty}')
-                                        .join('، '),
+                                    inv.items.map((e) => '${e.name} ×${e.qty}').join('، '),
                                     style: const TextStyle(fontSize: 13)),
                               ],
                             ),
@@ -528,10 +630,15 @@ class _InvoicesPageState extends State<InvoicesPage> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                             decoration: BoxDecoration(
-                                color: kTeal.withAlpha(40),
+                                color: inv.points < 0
+                                    ? Colors.red.withAlpha(40)
+                                    : kTeal.withAlpha(40),
                                 borderRadius: BorderRadius.circular(10)),
-                            child: Text('+${fmt(inv.points)}',
-                                style: const TextStyle(color: kTeal, fontWeight: FontWeight.w800)),
+                            child: Text(
+                                inv.points < 0 ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
+                                style: TextStyle(
+                                    color: inv.points < 0 ? Colors.red.shade300 : kTeal,
+                                    fontWeight: FontWeight.w800)),
                           ),
                           IconButton(
                               icon: const Icon(Icons.delete_outline_rounded,
@@ -542,11 +649,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 ],
               ),
       );
-
-  String _userName(String id) {
-    final m = _users.where((u) => u.id == id);
-    return m.isEmpty ? '—' : m.first.name;
-  }
 
   Widget _invoiceCard() => Container(
         padding: const EdgeInsets.all(18),
@@ -582,12 +684,45 @@ class _InvoicesPageState extends State<InvoicesPage> {
               const SizedBox(height: 6),
               Text('التاريخ: ${DateTime.now().toString().substring(0, 10)}',
                   style: const TextStyle(color: kInk, fontSize: 11)),
-              const SizedBox(height: 4),
-              Text('رقم الفاتورة: $_invNo',
-                  style: const TextStyle(color: kInk, fontSize: 11)),
             ]),
           ]),
           const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _invNo,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: kInk),
+                decoration: InputDecoration(
+                    labelText: 'رقم الفاتورة من الاكسل...',
+                    filled: true,
+                    fillColor: const Color(0xFFF4F6F8)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kTeal, foregroundColor: Colors.black),
+              onPressed: _fetch,
+              icon: const Icon(Icons.download_rounded, size: 18),
+              label: const Text('جلب'),
+            ),
+            if (_fetchedType.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                    color: _isReturn ? Colors.red.withAlpha(30) : Colors.green.withAlpha(30),
+                    borderRadius: BorderRadius.circular(10)),
+                child: Text(
+                    _isReturn ? 'مرتجع — تُخصم النقاط' : 'مبيع — تُضاف النقاط',
+                    style: TextStyle(
+                        color: _isReturn ? Colors.red : Colors.green.shade700,
+                        fontWeight: FontWeight.w800, fontSize: 12)),
+              ),
+            ],
+          ]),
+          const SizedBox(height: 10),
           if (_selected == null) ...[
             TextField(
               onChanged: (v) => setState(() => _query = v),
@@ -629,11 +764,12 @@ class _InvoicesPageState extends State<InvoicesPage> {
             color: kOrange,
             padding: const EdgeInsets.symmetric(vertical: 8),
             child: Row(children: const [
-              SizedBox(width: 34, child: Center(child: Text('NO', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
+              SizedBox(width: 30, child: Center(child: Text('NO', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
               Expanded(child: Center(child: Text('اسم الصنف', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
-              SizedBox(width: 74, child: Center(child: Text('سعر القطعة', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
-              SizedBox(width: 52, child: Center(child: Text('العدد', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
-              SizedBox(width: 74, child: Center(child: Text('المجموع', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
+              SizedBox(width: 70, child: Center(child: Text('سعر القطعة', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 10)))),
+              SizedBox(width: 46, child: Center(child: Text('العدد', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
+              SizedBox(width: 70, child: Center(child: Text('المجموع', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
+              SizedBox(width: 52, child: Center(child: Text('نقاط', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
             ]),
           ),
           ...List.generate(_items.length, (i) => _row(i, _items[i])),
@@ -655,8 +791,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
           ]),
           const SizedBox(height: 8),
           Row(children: [
-            const Text('نقاط هذه الفاتورة',
-                style: TextStyle(color: kInk, fontWeight: FontWeight.w700)),
+            Text(
+                _isReturn
+                    ? 'نقاط تُخصم من العميل'
+                    : 'نقاط تُضاف للعميل',
+                style: const TextStyle(color: kInk, fontWeight: FontWeight.w700)),
             const Spacer(),
             SizedBox(
               width: 90,
@@ -665,7 +804,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                   keyboardType: TextInputType.number,
                   style: const TextStyle(color: kInk),
                   decoration: InputDecoration(
-                      isDense: true, hintText: '${_total.round()}'),
+                      isDense: true, hintText: '${_sumPoints}'),
                   onChanged: (_) => setState(() {})),
             ),
           ]),
@@ -675,13 +814,18 @@ class _InvoicesPageState extends State<InvoicesPage> {
             height: 46,
             child: ElevatedButton(
               style: ElevatedButton.styleFrom(
-                  backgroundColor: kOrange, foregroundColor: Colors.black,
+                  backgroundColor: _isReturn ? Colors.red : kOrange,
+                  foregroundColor: _isReturn ? Colors.white : Colors.black,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
               onPressed: _busy ? null : _save,
               child: _busy
                   ? const SizedBox(width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2))
-                  : const Text('حفظ الفاتورة', style: TextStyle(fontWeight: FontWeight.w800)),
+                  : Text(
+                      _isReturn
+                          ? 'حفظ المرتجع (خصم النقاط)'
+                          : 'حفظ الفاتورة (إضافة النقاط)',
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
             ),
           ),
         ]),
@@ -693,7 +837,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(children: [
-        SizedBox(width: 34, child: Center(child: Text('${i + 1}', style: const TextStyle(color: kInk)))),
+        SizedBox(width: 30, child: Center(child: Text('${i + 1}', style: const TextStyle(color: kInk, fontSize: 12)))),
         const SizedBox(width: 6),
         Expanded(
             child: TextField(
@@ -702,7 +846,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 decoration: const InputDecoration(isDense: true))),
         const SizedBox(width: 6),
         SizedBox(
-          width: 74,
+          width: 70,
           child: TextField(
               controller: d.price,
               keyboardType: TextInputType.number,
@@ -712,7 +856,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
         ),
         const SizedBox(width: 6),
         SizedBox(
-          width: 52,
+          width: 46,
           child: TextField(
               controller: d.qty,
               keyboardType: TextInputType.number,
@@ -722,17 +866,30 @@ class _InvoicesPageState extends State<InvoicesPage> {
         ),
         const SizedBox(width: 6),
         SizedBox(
-          width: 74,
+          width: 70,
           child: Center(
               child: Text(fmt(price * qty),
-                  style: const TextStyle(color: kInk, fontWeight: FontWeight.w700))),
+                  style: const TextStyle(color: kInk, fontWeight: FontWeight.w700, fontSize: 12))),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 52,
+          child: TextField(
+              controller: d.points,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: kTeal, fontWeight: FontWeight.w800),
+              decoration: const InputDecoration(isDense: true),
+              onChanged: (_) => setState(() {})),
         ),
       ]),
     );
   }
 
   Future<void> _save() async {
-    if (_selected == null) return;
+    if (_selected == null) {
+      _snack('اختر العميل أولاً');
+      return;
+    }
     final items = _items
         .where((d) => d.name.text.trim().isNotEmpty)
         .map((d) => InvoiceItem(
@@ -743,32 +900,37 @@ class _InvoicesPageState extends State<InvoicesPage> {
     if (items.isEmpty) return;
     setState(() => _busy = true);
     try {
-      final points = int.tryParse(_pts.text) ?? _total.round();
+      final points = int.tryParse(_pts.text) ?? _sumPoints;
+      final signed = _isReturn ? -points : points;
       _invs.add(Invoice(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           userId: _selected!.id,
           date: DateTime.now().toString().substring(0, 10),
+          type: _isReturn ? 'return' : 'sale',
           total: _total,
-          points: points,
+          points: signed,
           items: items));
-      _selected!.points += points;
+      _selected!.points = (_selected!.points + signed).clamp(0, 1000000000);
       await GH.put('assets/data/invoices.json',
           jsonEncode(_invs.map((e) => e.toJson()).toList()), widget.token);
       await GH.put('assets/data/users.json',
           jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('تم الحفظ — سيصل التحديث للجوال خلال دقائق ✅')));
+      _snack(_isReturn
+          ? 'تم حفظ المرتجع وخصم $points نقطة ✅'
+          : 'تم حفظ الفاتورة وإضافة $points نقطة ✅');
       setState(() {
         _items.clear();
         _items.add(_Draft());
         _pts.clear();
+        _invNo.clear();
+        _fetchedType = '';
         _selected = null;
         _busy = false;
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+        _snack('Error: $e');
         setState(() => _busy = false);
       }
     }
