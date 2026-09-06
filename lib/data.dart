@@ -82,17 +82,19 @@ class InvoiceItem {
 }
 
 class Invoice {
-  String id, userId, date; double total; int points; List<InvoiceItem> items;
+  String id, userId, date, type; double total; int points; List<InvoiceItem> items;
   Invoice({required this.id, required this.userId, required this.date,
-      required this.total, required this.points, required this.items});
+      required this.total, required this.points, required this.items, this.type = 'sale'});
   factory Invoice.fromJson(Map<String, dynamic> j) => Invoice(
       id: '${j['id'] ?? ''}', userId: '${j['userId'] ?? ''}', date: j['date'] ?? '',
+      type: j['type'] ?? 'sale',
       total: (j['total'] as num?)?.toDouble() ?? 0,
       points: (j['points'] as num?)?.toInt() ?? 0,
       items: ((j['items'] as List<dynamic>?) ?? [])
           .map((e) => InvoiceItem.fromJson(e as Map<String, dynamic>)).toList());
   Map<String, dynamic> toJson() => {'id': id, 'userId': userId, 'date': date,
-      'total': total, 'points': points, 'items': items.map((e) => e.toJson()).toList()};
+      'type': type, 'total': total, 'points': points,
+      'items': items.map((e) => e.toJson()).toList()};
 }
 
 class Gift {
@@ -124,7 +126,7 @@ class GH {
     return jsonDecode(r.body)['sha'] as String?;
   }
 
-  static Future<void> put(String path, String content, String t) async {
+  static Future<void> putBinary(String path, List<int> bytes, String t) async {
     for (var attempt = 0; attempt < 3; attempt++) {
       final sha = await getSha(path, t);
       final r = await http.put(
@@ -132,7 +134,7 @@ class GH {
           headers: headers(t),
           body: jsonEncode({
             'message': 'Update $path (PC admin)',
-            'content': base64Encode(utf8.encode(content)),
+            'content': base64Encode(bytes),
             if (sha != null) 'sha': sha,
             'branch': kBranch,
           }));
@@ -144,6 +146,9 @@ class GH {
       throw Exception('PUT ${r.statusCode}');
     }
   }
+
+  static Future<void> put(String path, String content, String t) =>
+      putBinary(path, utf8.encode(content), t);
 
   static Future<String> getContent(String path, String t) async {
     final r = await http.get(
