@@ -192,9 +192,10 @@ class Store {
   static bool loaded = false;
 
   static Future<void> load() async {
-    final r = await Future.wait([GH.users(), GH.invoices()]);
-    users = r[0];
-    invoices = r[1];
+    final usersFuture = GH.users();
+    final invoicesFuture = GH.invoices();
+    users = await usersFuture;
+    invoices = await invoicesFuture;
     loaded = true;
   }
 
