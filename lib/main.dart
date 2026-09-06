@@ -182,13 +182,21 @@ class _UsersPageState extends State<UsersPage> {
   String _roleLabel(String r) =>
       r == 'agent' ? 'وكيل' : r == 'tech' ? 'فني' : r == 'admin' ? 'مدير' : 'عميل';
 
+  Future<void> _saveUsers() async {
+    await GH.put('assets/data/users.json',
+        jsonEncode(_users.map((u) => u.toJson()).toList()), widget.token);
+  }
+
   Future<void> _delete(User u) async {
     if (!await confirmDialog(context, 'حذف المستخدم "${u.name}"؟')) return;
+    _users.remove(u);
+    setState(() {});
     try {
-      final list = _users.where((x) => x.id != u.id).toList();
-      await GH.put('assets/data/users.json',
-          jsonEncode(list.map((u) => u.toJson()).toList()), widget.token);
-      setState(() => _users = list);
+      await _saveUsers();
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('تم الحذف والحفظ ✅')));
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
@@ -214,11 +222,14 @@ class _UsersPageState extends State<UsersPage> {
       ),
     );
     if (n == null || n == 0) return;
+    u.points += n;
+    setState(() {});
     try {
-      u.points += n;
-      await GH.put('assets/data/users.json',
-          jsonEncode(_users.map((u) => u.toJson()).toList()), widget.token);
-      setState(() {});
+      await _saveUsers();
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('أُضيفت $n نقطة لـ ${u.name} ✅')));
+      }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
@@ -236,7 +247,7 @@ class _UsersPageState extends State<UsersPage> {
                 onPressed: () async {
                   await showDialog(context: context,
                       builder: (_) => UserDialog(token: widget.token, users: _users));
-                  setState(() { _loading = true; _load(); });
+                  setState(() {});
                 }),
           ],
         ),
@@ -284,7 +295,7 @@ class _UsersPageState extends State<UsersPage> {
                           onPressed: () async {
                             await showDialog(context: context,
                                 builder: (_) => UserDialog(token: widget.token, users: _users, user: u));
-                            setState(() { _loading = true; _load(); });
+                            setState(() {});
                           }),
                       IconButton(tooltip: 'حذف', icon: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 18),
                           onPressed: () => _delete(u)),
@@ -413,7 +424,11 @@ class _UserDialogState extends State<UserDialog> {
       }
       await GH.put('assets/data/users.json',
           jsonEncode(widget.users.map((u) => u.toJson()).toList()), widget.token);
-      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('تم الحفظ ✅')));
+        Navigator.pop(context);
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -423,7 +438,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير + الاكسل =================
+// ================= الفواتير =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
@@ -555,17 +570,69 @@ class _InvoicesPageState extends State<InvoicesPage> {
 
   Future<void> _deleteInv(Invoice inv) async {
     if (!await confirmDialog(context, 'حذف الفاتورة وعكس نقاطها من العميل؟')) return;
+    final owner = _users.where((x) => x.id == inv.userId).toList();
+    if (owner.isNotEmpty) {
+      owner.first.points = (owner.first.points - inv.points).clamp(0, 1000000000);
+    }
+    _invs.remove(inv);
+    setState(() {});
     try {
-      final list = _invs.where((x) => x.id != inv.id).toList();
-      final owner = _users.where((x) => x.id == inv.userId).toList();
-      if (owner.isNotEmpty) {
-        owner.first.points = (owner.first.points - inv.points).clamp(0, 1000000000);
-      }
       await GH.put('assets/data/invoices.json',
-          jsonEncode(list.map((e) => e.toJson()).toList()), widget.token);
+          jsonEncode(_invs.map((e) => e.toJson()).toList()), widget.token);
       await GH.put('assets/data/users.json',
           jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
-      setState(() => _invs = list);
+      if (mounted) _snack('تم الحذف وعكس النقاط ✅');
+    } catch (e) {
+      if (mounted) _snack('Error: $e');
+    }
+  }
+
+  Future<void> _editInv(Invoice inv) async {
+    final isRet = inv.type == 'return' || inv.points < 0;
+    final pts = TextEditingController(text: '${inv.points.abs()}');
+    final tot = TextEditingController(text: inv.total.toStringAsFixed(0));
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kCard,
+        title: Text('تعديل فاتورة ${isRet ? 'مرتجع' : 'مبيع'}'),
+        content: SizedBox(
+          width: 320,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(controller: tot, keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'الإجمالي')),
+            const SizedBox(height: 10),
+            TextField(controller: pts, keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'النقاط')),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: kOrange, foregroundColor: Colors.black),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('حفظ'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final newPts = int.tryParse(pts.text) ?? inv.points.abs();
+    final newSigned = isRet ? -newPts : newPts;
+    final delta = newSigned - inv.points;
+    final owner = _users.where((x) => x.id == inv.userId).toList();
+    if (owner.isNotEmpty) {
+      owner.first.points = (owner.first.points + delta).clamp(0, 1000000000);
+    }
+    inv.total = double.tryParse(tot.text) ?? inv.total;
+    inv.points = newSigned;
+    setState(() {});
+    try {
+      await GH.put('assets/data/invoices.json',
+          jsonEncode(_invs.map((e) => e.toJson()).toList()), widget.token);
+      await GH.put('assets/data/users.json',
+          jsonEncode(_users.map((e) => e.toJson()).toList()), widget.token);
+      if (mounted) _snack('تم تعديل الفاتورة وتحديث النقاط ✅');
     } catch (e) {
       if (mounted) _snack('Error: $e');
     }
@@ -578,22 +645,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: const Text('الفواتير والنقاط'),
-          actions: [
-            IconButton(
-                tooltip: 'رفع ملف اكسل جديد',
-                icon: const Icon(Icons.upload_file_rounded),
-                onPressed: _refreshing ? null : _upload),
-            IconButton(
-                tooltip: 'تحديث الملف من المستودع',
-                icon: _refreshing
-                    ? const SizedBox(width: 20, height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
-                    : const Icon(Icons.sync_rounded, color: kTeal),
-                onPressed: _refreshing ? null : _refresh),
-          ],
-        ),
+        appBar: AppBar(title: const Text('الفواتير والنقاط')),
         body: _loading
             ? const Center(child: CircularProgressIndicator(color: kOrange))
             : ListView(
@@ -604,48 +656,77 @@ class _InvoicesPageState extends State<InvoicesPage> {
                   const Text('آخر الفواتير',
                       style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 10),
-                  ...(_invs.reversed.toList()).map((inv) => Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                            color: kCard, borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: kLine)),
-                        child: Row(children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('${_userName(inv.userId)}  •  ${inv.date}',
-                                    style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
-                                const SizedBox(height: 4),
-                                Text(
-                                    inv.items.map((e) => '${e.name} ×${e.qty}').join('، '),
-                                    style: const TextStyle(fontSize: 13)),
-                              ],
-                            ),
+                  ...(_invs.reversed.toList()).map((inv) {
+                    final neg = inv.points < 0;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Row(children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_userName(inv.userId),
+                                  style: const TextStyle(
+                                      color: kInk,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14)),
+                              const SizedBox(height: 2),
+                              Text(
+                                  '${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}',
+                                  style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 11)),
+                              const SizedBox(height: 4),
+                              Text(
+                                  inv.items
+                                      .map((e) => '${e.name} ×${e.qty}')
+                                      .join('، '),
+                                  style: TextStyle(
+                                      color: Colors.grey.shade700,
+                                      fontSize: 12)),
+                            ],
                           ),
+                        ),
+                        Column(children: [
                           Text(fmt(inv.total),
-                              style: const TextStyle(fontWeight: FontWeight.w800)),
-                          const SizedBox(width: 10),
+                              style: const TextStyle(
+                                  color: kInk,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16)),
+                          const SizedBox(height: 4),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                                color: inv.points < 0
-                                    ? Colors.red.withAlpha(40)
-                                    : kTeal.withAlpha(40),
-                                borderRadius: BorderRadius.circular(10)),
+                                color: neg
+                                    ? Colors.red.withAlpha(30)
+                                    : kTeal.withAlpha(30),
+                                borderRadius: BorderRadius.circular(8)),
                             child: Text(
-                                inv.points < 0 ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
+                                neg ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
                                 style: TextStyle(
-                                    color: inv.points < 0 ? Colors.red.shade300 : kTeal,
-                                    fontWeight: FontWeight.w800)),
+                                    color: neg ? Colors.red : kTeal,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12)),
                           ),
-                          IconButton(
-                              icon: const Icon(Icons.delete_outline_rounded,
-                                  color: Colors.red, size: 18),
-                              onPressed: () => _deleteInv(inv)),
                         ]),
-                      )),
+                        IconButton(
+                            tooltip: 'تعديل',
+                            icon: const Icon(Icons.edit_rounded,
+                                color: kOrange, size: 18),
+                            onPressed: () => _editInv(inv)),
+                        IconButton(
+                            tooltip: 'حذف',
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                color: Colors.red, size: 18),
+                            onPressed: () => _deleteInv(inv)),
+                      ]),
+                    );
+                  }),
                 ],
               ),
       );
@@ -935,4 +1016,156 @@ class _InvoicesPageState extends State<InvoicesPage> {
       }
     }
   }
+}
+
+// ================= الأكواد (جوال + كمبيوتر) =================
+class CodeFilesPage extends StatelessWidget {
+  final String token;
+  const CodeFilesPage({super.key, required this.token});
+
+  static const List<String> mobileFiles = [
+    'lib/main.dart',
+    'lib/core/app_settings.dart',
+    'lib/core/strings.dart',
+    'lib/core/theme.dart',
+    'lib/core/store_service.dart',
+    'lib/core/gifts_service.dart',
+    'lib/screens/login_screen.dart',
+    'lib/screens/main_screen.dart',
+    'lib/screens/home_screen.dart',
+    'lib/screens/products_screen.dart',
+    'lib/screens/settings_screen.dart',
+    'lib/screens/simple_screens.dart',
+    'lib/screens/about_screen.dart',
+    'lib/widgets/bottom_nav.dart',
+    'lib/widgets/gifts_view.dart',
+    'lib/widgets/pressable.dart',
+    'lib/widgets/fawori_logo.dart',
+    'pubspec.yaml',
+    'web/index.html',
+  ];
+
+  static const List<String> adminFiles = [
+    'lib/main.dart',
+    'lib/data.dart',
+    'lib/excel_service.dart',
+    'lib/extra.dart',
+    'pubspec.yaml',
+    'web/index.html',
+  ];
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('الأكواد')),
+        body: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            const Text('📱 أكواد تطبيق الجوال (FAWORI)',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kTeal)),
+            const SizedBox(height: 10),
+            ...mobileFiles.map((f) => _tile(context, f, kRepo)),
+            const SizedBox(height: 24),
+            const Text('🖥️ أكواد تطبيق الكمبيوتر (FAWORI-ADMIN)',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kOrange)),
+            const SizedBox(height: 10),
+            ...adminFiles.map((f) => _tile(context, f, kAdminRepo)),
+          ],
+        ),
+      );
+
+  Widget _tile(BuildContext context, String path, String repo) => Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: ListTile(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          tileColor: kCard,
+          leading: const Icon(Icons.description_outlined, color: kOrange),
+          title: Text(path, textDirection: TextDirection.ltr,
+              style: const TextStyle(fontSize: 13)),
+          trailing: const Icon(Icons.edit_rounded, color: kTeal, size: 18),
+          onTap: () => Navigator.push(context, MaterialPageRoute(
+              builder: (_) => CodeEditor(path: path, token: token, repo: repo))),
+        ),
+      );
+}
+
+class CodeEditor extends StatefulWidget {
+  final String path;
+  final String token;
+  final String repo;
+  const CodeEditor({super.key, required this.path, required this.token, required this.repo});
+  @override
+  State<CodeEditor> createState() => _CodeEditorState();
+}
+
+class _CodeEditorState extends State<CodeEditor> {
+  final _c = TextEditingController();
+  bool _loading = true;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final t = await GH.getContent(widget.path, widget.token, widget.repo);
+      if (mounted) setState(() { _c.text = t; _loading = false; });
+    } catch (e) {
+      if (mounted) {
+        setState(() => _loading = false);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await GH.put(widget.path, _c.text, widget.token, widget.repo);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('تم الحفظ ✅ — سيُعاد البناء خلال دقائق')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(
+          title: Text('${widget.repo == kAdminRepo ? '🖥️' : '📱'} ${widget.path}',
+              textDirection: TextDirection.ltr,
+              style: const TextStyle(fontSize: 14)),
+          actions: [
+            _saving
+                ? const Padding(padding: EdgeInsets.all(14),
+                    child: SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2)))
+                : IconButton(icon: const Icon(Icons.cloud_upload_outlined), onPressed: _save),
+          ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: kOrange))
+            : Padding(
+                padding: const EdgeInsets.all(12),
+                child: Container(
+                  decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.all(12),
+                  child: TextField(
+                    controller: _c,
+                    maxLines: null,
+                    expands: true,
+                    textDirection: TextDirection.ltr,
+                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                    decoration: const InputDecoration(
+                        border: InputBorder.none, contentPadding: EdgeInsets.zero),
+                  ),
+                ),
+              ),
+      );
 }
