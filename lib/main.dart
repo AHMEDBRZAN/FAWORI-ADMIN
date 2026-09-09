@@ -227,6 +227,59 @@ class _UsersPageState extends State<UsersPage> {
     }
   }
 
+  /// زر جديد: تعديل النقاط والرصيد المخزن معاً ثم رفع التغييرات
+  Future<void> _editBalances(User u) async {
+    final pts = TextEditingController(text: '${u.points}');
+    final stored = TextEditingController(text: '${u.stored}');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: kCard,
+        title: Text('تعديل رصيد ${u.name}'),
+        content: SizedBox(
+          width: 320,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+                controller: pts,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: kInk, fontWeight: FontWeight.w700),
+                decoration: const InputDecoration(labelText: 'النقاط')),
+            const SizedBox(height: 10),
+            TextField(
+                controller: stored,
+                keyboardType: TextInputType.number,
+                style: const TextStyle(color: kInk, fontWeight: FontWeight.w700),
+                decoration: const InputDecoration(labelText: 'الرصيد المخزن')),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: kOrange, foregroundColor: Colors.black),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('حفظ ورفع'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    u.points = int.tryParse(pts.text) ?? u.points;
+    u.stored = int.tryParse(stored.text) ?? u.stored;
+    setState(() {});
+    try {
+      await Store.saveUsers(widget.token);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('تم تعديل النقاط والرصيد المخزن ورفع التغييرات ✅')));
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
@@ -293,14 +346,16 @@ class _UsersPageState extends State<UsersPage> {
                         const Text('رصيد مخزن', style: TextStyle(color: Colors.grey, fontSize: 10)),
                       ]),
                       const SizedBox(width: 10),
-                      IconButton(tooltip: 'نقاط', icon: const Icon(Icons.add_circle_outline_rounded, color: kTeal, size: 20),
+                      IconButton(tooltip: 'إضافة نقاط', icon: const Icon(Icons.add_circle_outline_rounded, color: kTeal, size: 20),
                           onPressed: () => _addPoints(u)),
-                      IconButton(tooltip: 'تعديل', icon: const Icon(Icons.edit_rounded, color: kOrange, size: 18),
+                      IconButton(tooltip: 'تعديل البيانات', icon: const Icon(Icons.edit_rounded, color: kOrange, size: 18),
                           onPressed: () async {
                             await showDialog(context: context,
                                 builder: (_) => UserDialog(token: widget.token, users: _users, user: u));
                             setState(() {});
                           }),
+                      IconButton(tooltip: 'تعديل النقاط والرصيد المخزن', icon: const Icon(Icons.account_balance_wallet_outlined, color: kTeal, size: 20),
+                          onPressed: () => _editBalances(u)),
                       IconButton(tooltip: 'حذف', icon: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 18),
                           onPressed: () => _delete(u)),
                     ]),
@@ -478,7 +533,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
-  // حسابات صحيحة بالكامل بأعداد صحيحة (لا أخطاء double/int)
   int get _tRound => _total.round();
   int get _autoPoints => _tRound ~/ kPointUnit;
   int get _autoStored => _tRound % kPointUnit;
