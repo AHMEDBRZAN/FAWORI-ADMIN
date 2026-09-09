@@ -184,15 +184,15 @@ class GH {
   static Future<List<Gift>> gifts() => _load('gifts.json', Gift.fromJson);
 }
 
+/// مخزن موحّد داخل الجلسة — تحميل تسلسلي آمن الأنواع
 class Store {
   static List<User> users = [];
   static List<Invoice> invoices = [];
   static bool loaded = false;
 
   static Future<void> load() async {
-    final r = await Future.wait([GH.users(), GH.invoices()]);
-    users = (r[0] as List<User>);
-    invoices = (r[1] as List<Invoice>);
+    users = await GH.users();
+    invoices = await GH.invoices();
     loaded = true;
   }
 
