@@ -480,17 +480,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
-  int get _earnedPreview {
-    if (_selected == null) return 0;
-    if (_isReturn) return _total ~/ kPointUnit;
-    return (_selected!.stored + _total) ~/ kPointUnit;
-  }
-
-  int get _storedPreview {
-    if (_selected == null) return 0;
-    if (_isReturn) return _selected!.stored;
-    return (_selected!.stored + _total) % kPointUnit;
-  }
+  int get _autoPoints => _total ~/ kPointUnit;
+  int get _autoStored => _total % kPointUnit;
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
@@ -579,10 +570,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
   }
 
   Future<void> _deleteInv(Invoice inv) async {
-    if (!await confirmDialog(context, 'حذف الفاتورة وعكس نقاطها من العميل؟')) return;
+    if (!await confirmDialog(context, 'حذف الفاتورة وعكس نقاطها ورصيدها من العميل؟')) return;
     final owner = _users.where((x) => x.id == inv.userId).toList();
     if (owner.isNotEmpty) {
       owner.first.points = (owner.first.points - inv.points).clamp(0, 1000000000);
+      owner.first.stored = (owner.first.stored - inv.stored).clamp(0, 1000000000);
     }
     Store.invoices.remove(inv);
     setState(() {});
@@ -621,19 +613,28 @@ class _InvoicesPageState extends State<InvoicesPage> {
     if (ok != true) return;
     final newTotal = double.tryParse(tot.text) ?? inv.total;
     final newPts = newTotal ~/ kPointUnit;
-    final newSigned = isRet ? -newPts : newPts;
-    final delta = newSigned - inv.points;
+    final newRem = newTotal % kPointUnit;
+    final dPts = newPts - inv.points.abs();
+    final dRem = newRem - inv.stored.abs();
     final owner = _users.where((x) => x.id == inv.userId).toList();
     if (owner.isNotEmpty) {
-      owner.first.points = (owner.first.points + delta).clamp(0, 1000000000);
+      final o = owner.first;
+      if (isRet) {
+        o.points = (o.points - dPts).clamp(0, 1000000000);
+        o.stored = (o.stored - dRem).clamp(0, 1000000000);
+      } else {
+        o.points += dPts;
+        o.stored += dRem;
+      }
     }
     inv.total = newTotal;
-    inv.points = newSigned;
+    inv.points = isRet ? -newPts : newPts;
+    inv.stored = isRet ? -newRem : newRem;
     setState(() {});
     try {
       await Store.saveInvoices(widget.token);
       await Store.saveUsers(widget.token);
-      if (mounted) _snack('تم تعديل الفاتورة وتحديث النقاط ✅');
+      if (mounted) _snack('تم تعديل الفاتورة وتحديث النقاط والرصيد ✅');
     } catch (e) {
       if (mounted) _snack('Error: $e');
     }
@@ -729,6 +730,10 @@ class _InvoicesPageState extends State<InvoicesPage> {
                                     fontWeight: FontWeight.w800,
                                     fontSize: 12)),
                           ),
+                          const SizedBox(height: 4),
+                          Text('مخزن: ${fmt(inv.stored)}',
+                              style: TextStyle(
+                                  color: Colors.grey.shade600, fontSize: 10)),
                         ]),
                         IconButton(
                             tooltip: 'تعديل',
@@ -887,10 +892,10 @@ class _InvoicesPageState extends State<InvoicesPage> {
           ]),
           const SizedBox(height: 8),
           Row(children: [
-            Text(_isReturn ? 'نقاط تُخصم من الفاتورة' : 'نقاط من الفاتورة',
+            Text(_isReturn ? 'نقاط تُخصم من الفاتورة (تلقائي)' : 'نقاط تُضاف للعميل (تلقائي)',
                 style: const TextStyle(color: kInk, fontWeight: FontWeight.w700)),
             const Spacer(),
-            Text(_isReturn ? '-${fmt(_total ~/ kPointUnit)}' : '+${fmt(_earnedPreview)}',
+            Text(_isReturn ? '-${fmt(_autoPoints)}' : '+${fmt(_autoPoints)}',
                 style: TextStyle(
                     color: _isReturn ? Colors.red : kTeal,
                     fontWeight: FontWeight.w900,
@@ -898,10 +903,10 @@ class _InvoicesPageState extends State<InvoicesPage> {
           ]),
           const SizedBox(height: 8),
           Row(children: [
-            const Text('رصيد مخزن بعد الحفظ',
+            const Text('رصيد مخزن لهذه الفاتورة',
                 style: TextStyle(color: kInk, fontWeight: FontWeight.w700)),
             const Spacer(),
-            Text(fmt(_storedPreview),
+            Text(fmt(_autoStored),
                 style: const TextStyle(color: kInk, fontWeight: FontWeight.w800)),
           ]),
           const SizedBox(height: 14),
@@ -986,15 +991,20 @@ class _InvoicesPageState extends State<InvoicesPage> {
     if (items.isEmpty) return;
     setState(() => _busy = true);
     try {
+      final pts = _autoPoints;
+      final rem = _autoStored;
       int signed;
+      int signedStored;
       if (_isReturn) {
-        signed = -(_total ~/ kPointUnit);
-        _selected!.points = (_selected!.points + signed).clamp(0, 1000000000);
+        signed = -pts;
+        signedStored = -rem;
+        _selected!.points = (_selected!.points - pts).clamp(0, 1000000000);
+        _selected!.stored = (_selected!.stored - rem).clamp(0, 1000000000);
       } else {
-        final pool = _selected!.stored + _total;
-        signed = pool ~/ kPointUnit;
-        _selected!.stored = pool % kPointUnit;
-        _selected!.points += signed;
+        signed = pts;
+        signedStored = rem;
+        _selected!.points += pts;
+        _selected!.stored += rem;
       }
       Store.invoices.add(Invoice(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -1003,13 +1013,14 @@ class _InvoicesPageState extends State<InvoicesPage> {
           type: _isReturn ? 'return' : 'sale',
           total: _total,
           points: signed,
+          stored: signedStored,
           items: items));
       await Store.saveInvoices(widget.token);
       await Store.saveUsers(widget.token);
       if (!mounted) return;
       _snack(_isReturn
-          ? 'تم حفظ المرتجع وخصم ${signed.abs()} نقطة ✅'
-          : 'تم الحفظ: +$signed نقطة، الرصيد المخزن ${fmt(_selected!.stored)} ✅');
+          ? 'تم حفظ المرتجع: خصم $pts نقطة ورصيد $rem ✅'
+          : 'تم الحفظ: +$pts نقطة، رصيد مخزن للفاتورة $rem ✅');
       setState(() {
         _items.clear();
         _items.add(_Draft());
