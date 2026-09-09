@@ -191,8 +191,8 @@ class Store {
 
   static Future<void> load() async {
     final r = await Future.wait([GH.users(), GH.invoices()]);
-    users = (r[0] as List<User>);
-    invoices = (r[1] as List<Invoice>);
+    users = r[0] as List<User>;
+    invoices = r[1] as List<Invoice>;
     loaded = true;
   }
 
