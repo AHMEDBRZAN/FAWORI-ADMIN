@@ -1,5 +1,6 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:http/http.dart' as http;
 
 import 'data.dart';
@@ -177,7 +178,7 @@ class _UsersPageState extends State<UsersPage> {
   List<User> get _users => Store.users;
 
   String _roleLabel(String r) =>
-      r == 'agent' ? 'وكيل' : r == 'tech' ? 'فني' : r == 'admin' ? 'مدير' : 'عميل';
+      r == 'agent' ? 'وكيل' : r == 'tech' ? 'صباغ' : r == 'admin' ? 'مدير' : 'عميل';
 
   Future<void> _delete(User u) async {
     if (!await confirmDialog(context, 'حذف المستخدم "${u.name}"؟')) return;
@@ -227,7 +228,7 @@ class _UsersPageState extends State<UsersPage> {
     }
   }
 
-  /// زر جديد: تعديل النقاط والرصيد المخزن معاً ثم رفع التغييرات
+  /// تعديل النقاط والرصيد المخزن معاً ثم رفع التغييرات
   Future<void> _editBalances(User u) async {
     final pts = TextEditingController(text: '${u.points}');
     final stored = TextEditingController(text: '${u.stored}');
@@ -533,6 +534,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
+  // حسابات صحيحة بالكامل (قواعد الأنواع المعتمدة)
   int get _tRound => _total.round();
   int get _autoPoints => _tRound ~/ kPointUnit;
   int get _autoStored => _tRound % kPointUnit;
@@ -1179,6 +1181,12 @@ class _CodeEditorState extends State<CodeEditor> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     try {
       final t = await GH.getContent(widget.path, widget.token, widget.repo);
@@ -1188,6 +1196,33 @@ class _CodeEditorState extends State<CodeEditor> {
         setState(() => _loading = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
       }
+    }
+  }
+
+  Future<void> _copyAll() async {
+    await Clipboard.setData(ClipboardData(text: _c.text));
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('تم نسخ الكل ✅')));
+    }
+  }
+
+  Future<void> _paste() async {
+    final d = await Clipboard.getData(Clipboard.kTextPlain);
+    if (d != null && d.text != null && d.text!.isNotEmpty) {
+      setState(() => _c.text = d.text!);
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('تم اللصق ✅')));
+      }
+    }
+  }
+
+  void _clearAll() {
+    setState(() => _c.text = '');
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('تم مسح الكل')));
     }
   }
 
@@ -1205,6 +1240,24 @@ class _CodeEditorState extends State<CodeEditor> {
       if (mounted) setState(() => _saving = false);
     }
   }
+
+  Widget _toolBtn(IconData ic, String label, VoidCallback onTap) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: kCard,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: kOrange.withAlpha(60)),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(ic, color: kOrange, size: 16),
+            const SizedBox(width: 6),
+            Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+          ]),
+        ),
+      );
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -1224,19 +1277,31 @@ class _CodeEditorState extends State<CodeEditor> {
             ? const Center(child: CircularProgressIndicator(color: kOrange))
             : Padding(
                 padding: const EdgeInsets.all(12),
-                child: Container(
-                  decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(12)),
-                  padding: const EdgeInsets.all(12),
-                  child: TextField(
-                    controller: _c,
-                    maxLines: null,
-                    expands: true,
-                    textDirection: TextDirection.ltr,
-                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-                    decoration: const InputDecoration(
-                        border: InputBorder.none, contentPadding: EdgeInsets.zero),
+                child: Column(children: [
+                  Row(children: [
+                    Expanded(child: _toolBtn(Icons.content_copy_rounded, 'نسخ الكل', _copyAll)),
+                    const SizedBox(width: 8),
+                    Expanded(child: _toolBtn(Icons.content_paste_rounded, 'لصق', _paste)),
+                    const SizedBox(width: 8),
+                    Expanded(child: _toolBtn(Icons.delete_sweep_rounded, 'مسح الكل', _clearAll)),
+                  ]),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: Container(
+                      decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.all(12),
+                      child: TextField(
+                        controller: _c,
+                        maxLines: null,
+                        expands: true,
+                        textDirection: TextDirection.ltr,
+                        style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                        decoration: const InputDecoration(
+                            border: InputBorder.none, contentPadding: EdgeInsets.zero),
+                      ),
+                    ),
                   ),
-                ),
+                ]),
               ),
       );
 }
