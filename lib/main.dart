@@ -478,14 +478,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
+  // حسابات صحيحة بالكامل بأعداد صحيحة (لا أخطاء double/int)
   int get _tRound => _total.round();
   int get _autoPoints => _tRound ~/ kPointUnit;
   int get _autoStored => _tRound % kPointUnit;
 
   static const TextStyle _inkBold =
       TextStyle(color: kInk, fontWeight: FontWeight.w800, fontSize: 14);
-  static const TextStyle _inkValue =
-      TextStyle(color: kInk, fontWeight: FontWeight.w900, fontSize: 16);
   static const TextStyle _hintDark =
       TextStyle(color: Color(0xFF7A8699), fontWeight: FontWeight.w600);
   static const TextStyle _inputDark =
@@ -619,11 +618,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
       ),
     );
     if (ok != true) return;
-    final t = (double.tryParse(tot.text) ?? inv.total).round();
-    final newPts = t ~/ kPointUnit;
-    final newRem = t % kPointUnit;
-    final dP = newPts - inv.points.abs();
-    final dR = newRem - inv.stored.abs();
+    final int t = (double.tryParse(tot.text) ?? inv.total).round();
+    final int newPts = t ~/ kPointUnit;
+    final int newRem = t % kPointUnit;
+    final int dP = newPts - inv.points.abs();
+    final int dR = newRem - inv.stored.abs();
     final owner = _users.where((x) => x.id == inv.userId).toList();
     if (owner.isNotEmpty) {
       final o = owner.first;
@@ -989,8 +988,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
     if (items.isEmpty) return;
     setState(() => _busy = true);
     try {
-      final pts = _autoPoints;
-      final rem = _autoStored;
+      final int pts = _autoPoints;
+      final int rem = _autoStored;
       int signed;
       int signedStored;
       if (_isReturn) {
