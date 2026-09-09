@@ -33,6 +33,7 @@ class Gate extends StatefulWidget {
 class _GateState extends State<Gate> {
   String? _token;
   bool _loading = true;
+
   @override
   void initState() {
     super.initState();
@@ -163,6 +164,7 @@ class UsersPage extends StatefulWidget {
 
 class _UsersPageState extends State<UsersPage> {
   bool _loading = true;
+
   @override
   void initState() {
     super.initState();
@@ -482,15 +484,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
   int get _autoPoints => _tRound ~/ kPointUnit;
   int get _autoStored => _tRound % kPointUnit;
 
-  static const TextStyle _inkBold =
-      TextStyle(color: kInk, fontWeight: FontWeight.w800, fontSize: 14);
-  static const TextStyle _inkValue =
-      TextStyle(color: kInk, fontWeight: FontWeight.w900, fontSize: 16);
-  static const TextStyle _hintDark =
-      TextStyle(color: Color(0xFF7A8699), fontWeight: FontWeight.w600);
-  static const TextStyle _inputDark =
-      TextStyle(color: kInk, fontWeight: FontWeight.w700);
-
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
@@ -653,15 +646,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
     return m.isEmpty ? '—' : m.first.name;
   }
 
-  Widget _sumRow(String label, String value, Color color) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(children: [
-          Text(label, style: _inkBold),
-          const Spacer(),
-          Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16)),
-        ]),
-      );
-
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
@@ -709,14 +693,19 @@ class _InvoicesPageState extends State<InvoicesPage> {
                                       fontWeight: FontWeight.w800,
                                       fontSize: 14)),
                               const SizedBox(height: 2),
-                              Text('${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}',
+                              Text(
+                                  '${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}',
                                   style: TextStyle(
-                                      color: Colors.grey.shade600, fontSize: 11)),
+                                      color: Colors.grey.shade600,
+                                      fontSize: 11)),
                               const SizedBox(height: 4),
                               Text(
-                                  inv.items.map((e) => '${e.name} ×${e.qty}').join('، '),
+                                  inv.items
+                                      .map((e) => '${e.name} ×${e.qty}')
+                                      .join('، '),
                                   style: TextStyle(
-                                      color: Colors.grey.shade700, fontSize: 12)),
+                                      color: Colors.grey.shade700,
+                                      fontSize: 12)),
                             ],
                           ),
                         ),
@@ -783,13 +772,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 const Text('شركة فاوري',
                     style: TextStyle(color: kInk, fontSize: 20, fontWeight: FontWeight.w900)),
                 const Text('Fawori Company',
-                    style: TextStyle(color: Color(0xFF7A8699), fontSize: 11)),
+                    style: TextStyle(color: Colors.grey, fontSize: 11)),
                 const SizedBox(height: 10),
                 Text('فاتورة إلي: ${_selected?.name ?? '..........................'}',
-                    style: _inkBold),
+                    style: const TextStyle(color: kInk, fontSize: 12, fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
                 Text('رقم الهاتف: ${_selected?.phone ?? '..........................'}',
-                    style: _inkBold),
+                    style: const TextStyle(color: kInk, fontSize: 12, fontWeight: FontWeight.w700)),
               ]),
             ),
             Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
@@ -797,7 +786,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                   style: TextStyle(color: kInk, fontSize: 26, fontWeight: FontWeight.w900)),
               const SizedBox(height: 6),
               Text('التاريخ: ${DateTime.now().toString().substring(0, 10)}',
-                  style: const TextStyle(color: kInk, fontSize: 11, fontWeight: FontWeight.w700)),
+                  style: const TextStyle(color: kInk, fontSize: 11)),
             ]),
           ]),
           const SizedBox(height: 14),
@@ -806,13 +795,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
               child: TextField(
                 controller: _invNo,
                 keyboardType: TextInputType.number,
-                style: _inputDark,
-                decoration: const InputDecoration(
+                style: const TextStyle(color: kInk),
+                decoration: InputDecoration(
                     labelText: 'رقم الفاتورة من الاكسل...',
-                    labelStyle: _hintDark,
-                    hintStyle: _hintDark,
                     filled: true,
-                    fillColor: Color(0xFFF4F6F8)),
+                    fillColor: const Color(0xFFF4F6F8)),
               ),
             ),
             const SizedBox(width: 8),
@@ -821,7 +808,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                   backgroundColor: kTeal, foregroundColor: Colors.black),
               onPressed: _fetch,
               icon: const Icon(Icons.download_rounded, size: 18),
-              label: const Text('جلب', style: TextStyle(fontWeight: FontWeight.w800)),
+              label: const Text('جلب'),
             ),
             if (_fetchedType.isNotEmpty) ...[
               const SizedBox(width: 8),
@@ -842,13 +829,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
           if (_selected == null) ...[
             TextField(
               onChanged: (v) => setState(() => _query = v),
-              style: _inputDark,
-              decoration: const InputDecoration(
+              style: const TextStyle(color: kInk),
+              decoration: InputDecoration(
                   labelText: 'ابحث باسم العميل أو رقمه...',
-                  labelStyle: _hintDark,
-                  hintStyle: _hintDark,
                   filled: true,
-                  fillColor: Color(0xFFF4F6F8)),
+                  fillColor: const Color(0xFFF4F6F8)),
             ),
             if (_query.trim().isNotEmpty)
               Container(
@@ -861,8 +846,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
                           u.name.contains(_query) || u.phone.contains(_query))
                       .map((u) => ListTile(
                             dense: true,
-                            title: Text(u.name, style: const TextStyle(color: kInk, fontWeight: FontWeight.w700)),
-                            subtitle: Text(u.phone, style: const TextStyle(fontSize: 11, color: Color(0xFF7A8699))),
+                            title: Text(u.name, style: const TextStyle(color: kInk)),
+                            subtitle: Text(u.phone, style: const TextStyle(fontSize: 11)),
                             onTap: () =>
                                 setState(() { _selected = u; _query = ''; }),
                           ))
@@ -874,8 +859,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
               alignment: Alignment.centerLeft,
               child: TextButton(
                 onPressed: () => setState(() => _selected = null),
-                child: const Text('تغيير العميل',
-                    style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+                child: const Text('تغيير العميل'),
               ),
             ),
           const SizedBox(height: 12),
@@ -896,18 +880,37 @@ class _InvoicesPageState extends State<InvoicesPage> {
             child: TextButton.icon(
               onPressed: () => setState(() => _items.add(_Draft())),
               icon: const Icon(Icons.add_rounded, size: 18),
-              label: const Text('إضافة خانة',
-                  style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+              label: const Text('إضافة خانة'),
             ),
           ),
           const Divider(),
-          _sumRow('التكلفة الإجمالية', fmt(_tRound), kInk),
-          _sumRow(
-              _isReturn ? 'نقاط تُخصم من الفاتورة' : 'نقاط من الفاتورة',
-              _isReturn ? '-${fmt(_autoPoints)}' : '+${fmt(_autoPoints)}',
-              kTeal),
-          _sumRow('رصيد مخزن من الفاتورة', fmt(_autoStored), kInk),
-          const SizedBox(height: 10),
+          Row(children: [
+            const Text('التكلفة الإجمالية',
+                style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+            const Spacer(),
+            Text(fmt(_tRound),
+                style: const TextStyle(color: kInk, fontSize: 18, fontWeight: FontWeight.w900)),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            Text(_isReturn ? 'نقاط تُخصم من الفاتورة (تلقائي)' : 'نقاط تُضاف للعميل (تلقائي)',
+                style: const TextStyle(color: kInk, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            Text(_isReturn ? '-${fmt(_autoPoints)}' : '+${fmt(_autoPoints)}',
+                style: TextStyle(
+                    color: _isReturn ? Colors.red : kTeal,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 15)),
+          ]),
+          const SizedBox(height: 8),
+          Row(children: [
+            const Text('رصيد مخزن لهذه الفاتورة',
+                style: TextStyle(color: kInk, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            Text(fmt(_autoStored),
+                style: const TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+          ]),
+          const SizedBox(height: 14),
           SizedBox(
             width: double.infinity,
             height: 46,
@@ -936,12 +939,12 @@ class _InvoicesPageState extends State<InvoicesPage> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(children: [
-        SizedBox(width: 30, child: Center(child: Text('${i + 1}', style: const TextStyle(color: kInk, fontSize: 12, fontWeight: FontWeight.w700)))),
+        SizedBox(width: 30, child: Center(child: Text('${i + 1}', style: const TextStyle(color: kInk, fontSize: 12)))),
         const SizedBox(width: 6),
         Expanded(
             child: TextField(
                 controller: d.name,
-                style: _inputDark,
+                style: const TextStyle(color: kInk),
                 decoration: const InputDecoration(isDense: true))),
         const SizedBox(width: 6),
         SizedBox(
@@ -949,7 +952,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           child: TextField(
               controller: d.price,
               keyboardType: TextInputType.number,
-              style: _inputDark,
+              style: const TextStyle(color: kInk),
               decoration: const InputDecoration(isDense: true),
               onChanged: (_) => setState(() {})),
         ),
@@ -959,7 +962,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           child: TextField(
               controller: d.qty,
               keyboardType: TextInputType.number,
-              style: _inputDark,
+              style: const TextStyle(color: kInk),
               decoration: const InputDecoration(isDense: true),
               onChanged: (_) => setState(() {})),
         ),
@@ -968,7 +971,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           width: 70,
           child: Center(
               child: Text(fmt(price * qty),
-                  style: const TextStyle(color: kInk, fontWeight: FontWeight.w800, fontSize: 12))),
+                  style: const TextStyle(color: kInk, fontWeight: FontWeight.w700, fontSize: 12))),
         ),
       ]),
     );
@@ -1008,182 +1011,58 @@ class _InvoicesPageState extends State<InvoicesPage> {
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           userId: _selected!.id,
           date: DateTime.now().toString().substring(0, 10),
-          type: _isReturn ? 'return' : 'sale',
-          total: _total,
+          total: _tRound.toDouble(),
           points: signed,
           stored: signedStored,
+          type: _isReturn ? 'return' : 'sale',
           items: items));
-      await Store.saveInvoices(widget.token);
-      await Store.saveUsers(widget.token);
-      if (!mounted) return;
-      _snack(_isReturn
-          ? 'تم حفظ المرتجع: خصم $pts نقطة ورصيد $rem ✅'
-          : 'تم الحفظ: +$pts نقطة، رصيد مخزن للفاتورة $rem ✅');
       setState(() {
-        _items.clear();
-        _items.add(_Draft());
         _invNo.clear();
         _fetchedType = '';
-        _selected = null;
-        _busy = false;
+        _items.clear();
+        _items.add(_Draft());
       });
-    } catch (e) {
+      await Store.saveInvoices(widget.token);
+      await Store.saveUsers(widget.token);
       if (mounted) {
-        _snack('Error: $e');
-        setState(() => _busy = false);
+        _snack(_isReturn ? 'تم حفظ المرتجع وخصم النقاط ✅' : 'تم حفظ الفاتورة وإضافة النقاط ✅');
       }
+    } catch (e) {
+      if (mounted) _snack('Error: $e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 }
 
-// ================= الأكواد (جوال + كمبيوتر) =================
-class CodeFilesPage extends StatelessWidget {
+// ================= الهدايا =================
+class GiftsPage extends StatefulWidget {
+  final String token;
+  const GiftsPage({super.key, required this.token});
+  @override
+  State<GiftsPage> createState() => _GiftsPageState();
+}
+
+class _GiftsPageState extends State<GiftsPage> {
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('الهدايا')),
+        body: const Center(child: Text('قريباً')),
+      );
+}
+
+// ================= الأكواد =================
+class CodeFilesPage extends StatefulWidget {
   final String token;
   const CodeFilesPage({super.key, required this.token});
+  @override
+  State<CodeFilesPage> createState() => _CodeFilesPageState();
+}
 
-  static const List<String> mobileFiles = [
-    'lib/main.dart',
-    'lib/core/app_settings.dart',
-    'lib/core/strings.dart',
-    'lib/core/theme.dart',
-    'lib/core/store_service.dart',
-    'lib/core/gifts_service.dart',
-    'lib/screens/login_screen.dart',
-    'lib/screens/main_screen.dart',
-    'lib/screens/home_screen.dart',
-    'lib/screens/products_screen.dart',
-    'lib/screens/settings_screen.dart',
-    'lib/screens/simple_screens.dart',
-    'lib/screens/about_screen.dart',
-    'lib/widgets/bottom_nav.dart',
-    'lib/widgets/gifts_view.dart',
-    'lib/widgets/pressable.dart',
-    'lib/widgets/fawori_logo.dart',
-    'pubspec.yaml',
-    'web/index.html',
-  ];
-
-  static const List<String> adminFiles = [
-    'lib/main.dart',
-    'lib/data.dart',
-    'lib/excel_service.dart',
-    'lib/extra.dart',
-    'pubspec.yaml',
-    'web/index.html',
-  ];
-
+class _CodeFilesPageState extends State<CodeFilesPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(title: const Text('الأكواد')),
-        body: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            const Text('📱 أكواد تطبيق الجوال (FAWORI)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kTeal)),
-            const SizedBox(height: 10),
-            ...mobileFiles.map((f) => _tile(context, f, kRepo)),
-            const SizedBox(height: 24),
-            const Text('🖥️ أكواد تطبيق الكمبيوتر (FAWORI-ADMIN)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kOrange)),
-            const SizedBox(height: 10),
-            ...adminFiles.map((f) => _tile(context, f, kAdminRepo)),
-          ],
-        ),
-      );
-
-  Widget _tile(BuildContext context, String path, String repo) => Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        child: ListTile(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          tileColor: kCard,
-          leading: const Icon(Icons.description_outlined, color: kOrange),
-          title: Text(path, textDirection: TextDirection.ltr,
-              style: const TextStyle(fontSize: 13)),
-          trailing: const Icon(Icons.edit_rounded, color: kTeal, size: 18),
-          onTap: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => CodeEditor(path: path, token: token, repo: repo))),
-        ),
-      );
-}
-
-class CodeEditor extends StatefulWidget {
-  final String path;
-  final String token;
-  final String repo;
-  const CodeEditor({super.key, required this.path, required this.token, required this.repo});
-  @override
-  State<CodeEditor> createState() => _CodeEditorState();
-}
-
-class _CodeEditorState extends State<CodeEditor> {
-  final _c = TextEditingController();
-  bool _loading = true;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    try {
-      final t = await GH.getContent(widget.path, widget.token, widget.repo);
-      if (mounted) setState(() { _c.text = t; _loading = false; });
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loading = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-    }
-  }
-
-  Future<void> _save() async {
-    setState(() => _saving = true);
-    try {
-      await GH.put(widget.path, _c.text, widget.token, widget.repo);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('تم الحفظ ✅ — سيُعاد البناء خلال دقائق')));
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: Text('${widget.repo == kAdminRepo ? '🖥️' : '📱'} ${widget.path}',
-              textDirection: TextDirection.ltr,
-              style: const TextStyle(fontSize: 14)),
-          actions: [
-            _saving
-                ? const Padding(padding: EdgeInsets.all(14),
-                    child: SizedBox(width: 20, height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2)))
-                : IconButton(icon: const Icon(Icons.cloud_upload_outlined), onPressed: _save),
-          ],
-        ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator(color: kOrange))
-            : Padding(
-                padding: const EdgeInsets.all(12),
-                child: Container(
-                  decoration: BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(12)),
-                  padding: const EdgeInsets.all(12),
-                  child: TextField(
-                    controller: _c,
-                    maxLines: null,
-                    expands: true,
-                    textDirection: TextDirection.ltr,
-                    style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
-                    decoration: const InputDecoration(
-                        border: InputBorder.none, contentPadding: EdgeInsets.zero),
-                  ),
-                ),
-              ),
+        body: const Center(child: Text('قريباً')),
       );
 }
