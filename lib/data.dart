@@ -10,6 +10,8 @@ const String kAdminRepo = 'FAWORI-ADMIN';
 const String kBranch = 'main';
 const String kSite = 'https://ahmedbrzan.github.io/FAWORI';
 
+const int kPointUnit = 125000;
+
 const Color kOrange = Color(0xFFE8A33D);
 const Color kTeal = Color(0xFF3EC6C0);
 const Color kBg = Color(0xFF141419);
@@ -54,22 +56,24 @@ Future<bool> confirmDialog(BuildContext context, String msg) async {
 class User {
   String id, name, phone, password, role, address, housing, marital, car;
   int points;
+  int stored;
   User({
     required this.id, required this.name, required this.phone,
     required this.password, required this.role,
     this.address = '', this.housing = '', this.marital = '', this.car = '',
-    this.points = 0,
+    this.points = 0, this.stored = 0,
   });
   factory User.fromJson(Map<String, dynamic> j) => User(
       id: '${j['id'] ?? ''}', name: j['name'] ?? '', phone: '${j['phone'] ?? ''}',
       password: '${j['password'] ?? ''}', role: j['role'] ?? 'customer',
       address: j['address'] ?? '', housing: j['housing'] ?? '',
       marital: j['marital'] ?? '', car: j['car'] ?? '',
-      points: (j['points'] as num?)?.toInt() ?? 0);
+      points: (j['points'] as num?)?.toInt() ?? 0,
+      stored: (j['stored'] as num?)?.toInt() ?? 0);
   Map<String, dynamic> toJson() => {
       'id': id, 'name': name, 'phone': phone, 'password': password,
       'role': role, 'address': address, 'housing': housing,
-      'marital': marital, 'car': car, 'points': points};
+      'marital': marital, 'car': car, 'points': points, 'stored': stored};
 }
 
 class InvoiceItem {
@@ -185,17 +189,16 @@ class GH {
   static Future<List<Gift>> gifts() => _load('gifts.json', Gift.fromJson);
 }
 
-/// مخزن موحّد: كل الصفحات تقرأ وتكتب من نفس القائمة داخل الجلسة
+/// مخزن موحّد داخل الجلسة
 class Store {
   static List<User> users = [];
   static List<Invoice> invoices = [];
   static bool loaded = false;
 
   static Future<void> load() async {
-    final usersFuture = GH.users();
-    final invoicesFuture = GH.invoices();
-    users = await usersFuture;
-    invoices = await invoicesFuture;
+    final r = await Future.wait([GH.users(), GH.invoices()]);
+    users = r[0];
+    invoices = r[1];
     loaded = true;
   }
 
