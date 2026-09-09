@@ -39,9 +39,7 @@ Future<bool> confirmDialog(BuildContext context, String msg) async {
       title: const Text('تأكيد'),
       content: Text(msg),
       actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('إلغاء')),
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
         ElevatedButton(
           style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
           onPressed: () => Navigator.pop(context, true),
@@ -57,12 +55,10 @@ class User {
   String id, name, phone, password, role, address, housing, marital, car;
   int points;
   int stored;
-  User({
-    required this.id, required this.name, required this.phone,
-    required this.password, required this.role,
-    this.address = '', this.housing = '', this.marital = '', this.car = '',
-    this.points = 0, this.stored = 0,
-  });
+  User({required this.id, required this.name, required this.phone,
+      required this.password, required this.role, this.address = '',
+      this.housing = '', this.marital = '', this.car = '',
+      this.points = 0, this.stored = 0});
   factory User.fromJson(Map<String, dynamic> j) => User(
       id: '${j['id'] ?? ''}', name: j['name'] ?? '', phone: '${j['phone'] ?? ''}',
       password: '${j['password'] ?? ''}', role: j['role'] ?? 'customer',
@@ -70,9 +66,8 @@ class User {
       marital: j['marital'] ?? '', car: j['car'] ?? '',
       points: (j['points'] as num?)?.toInt() ?? 0,
       stored: (j['stored'] as num?)?.toInt() ?? 0);
-  Map<String, dynamic> toJson() => {
-      'id': id, 'name': name, 'phone': phone, 'password': password,
-      'role': role, 'address': address, 'housing': housing,
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'phone': phone,
+      'password': password, 'role': role, 'address': address, 'housing': housing,
       'marital': marital, 'car': car, 'points': points, 'stored': stored};
 }
 
@@ -80,8 +75,7 @@ class InvoiceItem {
   String name; double price; int qty;
   InvoiceItem({required this.name, required this.price, this.qty = 1});
   factory InvoiceItem.fromJson(Map<String, dynamic> j) => InvoiceItem(
-      name: j['name'] ?? '',
-      price: (j['price'] as num?)?.toDouble() ?? 0,
+      name: j['name'] ?? '', price: (j['price'] as num?)?.toDouble() ?? 0,
       qty: (j['qty'] as num?)?.toInt() ?? 1);
   Map<String, dynamic> toJson() => {'name': name, 'price': price, 'qty': qty};
 }
@@ -97,8 +91,7 @@ class Invoice {
       this.type = 'sale', this.stored = 0});
   factory Invoice.fromJson(Map<String, dynamic> j) => Invoice(
       id: '${j['id'] ?? ''}', userId: '${j['userId'] ?? ''}', date: j['date'] ?? '',
-      type: j['type'] ?? 'sale',
-      total: (j['total'] as num?)?.toDouble() ?? 0,
+      type: j['type'] ?? 'sale', total: (j['total'] as num?)?.toDouble() ?? 0,
       points: (j['points'] as num?)?.toInt() ?? 0,
       stored: (j['stored'] as num?)?.toInt() ?? 0,
       items: ((j['items'] as List<dynamic>?) ?? [])
