@@ -90,19 +90,21 @@ class Invoice {
   String id, userId, date, type;
   double total;
   int points;
+  int stored;
   List<InvoiceItem> items;
   Invoice({required this.id, required this.userId, required this.date,
       required this.total, required this.points, required this.items,
-      this.type = 'sale'});
+      this.type = 'sale', this.stored = 0});
   factory Invoice.fromJson(Map<String, dynamic> j) => Invoice(
       id: '${j['id'] ?? ''}', userId: '${j['userId'] ?? ''}', date: j['date'] ?? '',
       type: j['type'] ?? 'sale',
       total: (j['total'] as num?)?.toDouble() ?? 0,
       points: (j['points'] as num?)?.toInt() ?? 0,
+      stored: (j['stored'] as num?)?.toInt() ?? 0,
       items: ((j['items'] as List<dynamic>?) ?? [])
           .map((e) => InvoiceItem.fromJson(e as Map<String, dynamic>)).toList());
   Map<String, dynamic> toJson() => {'id': id, 'userId': userId, 'date': date,
-      'type': type, 'total': total, 'points': points,
+      'type': type, 'total': total, 'points': points, 'stored': stored,
       'items': items.map((e) => e.toJson()).toList()};
 }
 
@@ -189,7 +191,6 @@ class GH {
   static Future<List<Gift>> gifts() => _load('gifts.json', Gift.fromJson);
 }
 
-/// مخزن موحّد داخل الجلسة
 class Store {
   static List<User> users = [];
   static List<Invoice> invoices = [];
