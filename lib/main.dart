@@ -178,7 +178,7 @@ class _UsersPageState extends State<UsersPage> {
   List<User> get _users => Store.users;
 
   String _roleLabel(String r) =>
-      r == 'وكيل' ? 'وكيل' : r == 'صباغ' ? 'صباغ' : r == 'عميل' ? 'مدير' : 'عميل';
+      r == 'agent' ? 'وكيل' : r == 'tech' ? 'صباغ' : r == 'admin' ? 'مدير' : 'عميل';
 
   Future<void> _delete(User u) async {
     if (!await confirmDialog(context, 'حذف المستخدم "${u.name}"؟')) return;
@@ -526,7 +526,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
-  // قواعد الأنواع: كل الحسابات بأعداد صحيحة
   int get _tRound => _total.round();
   int get _autoPoints => _tRound ~/ kPointUnit;
   int get _autoStored => _tRound % kPointUnit;
@@ -756,7 +755,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                                       fontWeight: FontWeight.w800,
                                       fontSize: 14)),
                               const SizedBox(height: 2),
-                              Text('${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}',
+                              Text('${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}  •  رقم ${inv.no.isEmpty ? '—' : inv.no}',
                                   style: TextStyle(
                                       color: Colors.grey.shade600, fontSize: 11)),
                               const SizedBox(height: 4),
@@ -845,6 +844,9 @@ class _InvoicesPageState extends State<InvoicesPage> {
               const SizedBox(height: 6),
               Text('التاريخ: ${DateTime.now().toString().substring(0, 10)}',
                   style: const TextStyle(color: kInk, fontSize: 11, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 4),
+              Text('رقم الفاتورة: ${_invNo.text.trim().isEmpty ? '————' : _invNo.text.trim()}',
+                  style: const TextStyle(color: kInk, fontSize: 11, fontWeight: FontWeight.w700)),
             ]),
           ]),
           const SizedBox(height: 14),
@@ -854,6 +856,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 controller: _invNo,
                 keyboardType: TextInputType.number,
                 style: _inputDark,
+                onChanged: (_) => setState(() {}),
                 decoration: const InputDecoration(
                     labelText: 'رقم الفاتورة من الاكسل...',
                     labelStyle: _hintDark,
@@ -1053,6 +1056,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
       }
       Store.invoices.add(Invoice(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
+          no: _invNo.text.trim(),
           userId: _selected!.id,
           date: DateTime.now().toString().substring(0, 10),
           type: _isReturn ? 'return' : 'sale',
