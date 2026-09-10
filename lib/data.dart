@@ -81,23 +81,24 @@ class InvoiceItem {
 }
 
 class Invoice {
-  String id, userId, date, type;
+  String id, userId, date, type, no;
   double total;
   int points;
   int stored;
   List<InvoiceItem> items;
   Invoice({required this.id, required this.userId, required this.date,
       required this.total, required this.points, required this.items,
-      this.type = 'sale', this.stored = 0});
+      this.type = 'sale', this.stored = 0, this.no = ''});
   factory Invoice.fromJson(Map<String, dynamic> j) => Invoice(
       id: '${j['id'] ?? ''}', userId: '${j['userId'] ?? ''}', date: j['date'] ?? '',
-      type: j['type'] ?? 'sale', total: (j['total'] as num?)?.toDouble() ?? 0,
+      type: j['type'] ?? 'sale', no: j['no']?.toString() ?? '',
+      total: (j['total'] as num?)?.toDouble() ?? 0,
       points: (j['points'] as num?)?.toInt() ?? 0,
       stored: (j['stored'] as num?)?.toInt() ?? 0,
       items: ((j['items'] as List<dynamic>?) ?? [])
           .map((e) => InvoiceItem.fromJson(e as Map<String, dynamic>)).toList());
   Map<String, dynamic> toJson() => {'id': id, 'userId': userId, 'date': date,
-      'type': type, 'total': total, 'points': points, 'stored': stored,
+      'type': type, 'no': no, 'total': total, 'points': points, 'stored': stored,
       'items': items.map((e) => e.toJson()).toList()};
 }
 
