@@ -178,7 +178,7 @@ class _UsersPageState extends State<UsersPage> {
   List<User> get _users => Store.users;
 
   String _roleLabel(String r) =>
-      r == 'agent' ? 'وكيل' : r == 'tech' ? 'صباغ' : r == 'admin' ? 'مدير' : 'عميل';
+      r == 'وكيل' ? 'وكيل' : r == 'صباغ' ? 'صباغ' : r == 'عميل' ? 'مدير' : 'عميل';
 
   Future<void> _delete(User u) async {
     if (!await confirmDialog(context, 'حذف المستخدم "${u.name}"؟')) return;
