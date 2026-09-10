@@ -22,8 +22,8 @@ const Color kInk = Color(0xFF23405C);
 String fmt(num n) {
   final s = n.toStringAsFixed(0);
   final out = StringBuffer();
-  var c = 0;
-  for (var i = s.length - 1; i >= 0; i--) {
+  int c = 0;
+  for (int i = s.length - 1; i >= 0; i--) {
     out.write(s[i]);
     c++;
     if (c % 3 == 0 && i != 0) out.write(',');
@@ -132,7 +132,7 @@ class GH {
 
   static Future<void> putBinary(String path, List<int> bytes, String t,
       [String repo = kRepo]) async {
-    for (var attempt = 0; attempt < 3; attempt++) {
+    for (int attempt = 0; attempt < 3; attempt++) {
       final sha = await getSha(path, t, repo);
       final r = await http.put(
           Uri.parse('https://api.github.com/repos/$kOwner/$repo/contents/$path'),
@@ -184,7 +184,6 @@ class GH {
   static Future<List<Gift>> gifts() => _load('gifts.json', Gift.fromJson);
 }
 
-/// مخزن موحّد داخل الجلسة — تحميل تسلسلي آمن الأنواع
 class Store {
   static List<User> users = [];
   static List<Invoice> invoices = [];
