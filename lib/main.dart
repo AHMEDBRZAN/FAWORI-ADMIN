@@ -178,7 +178,7 @@ class _UsersPageState extends State<UsersPage> {
   List<User> get _users => Store.users;
 
   String _roleLabel(String r) =>
-      r == 'وكيل' ? 'وكيل' : r == 'صباغ' ? 'صباغ' : r == 'عميل' ? 'مدير' : 'عميل';
+      r == 'agent' ? 'وكيل' : r == 'tech' ? 'صباغ' : r == 'admin' ? 'مدير' : 'عميل';
 
   Future<void> _delete(User u) async {
     if (!await confirmDialog(context, 'حذف المستخدم "${u.name}"؟')) return;
@@ -228,7 +228,6 @@ class _UsersPageState extends State<UsersPage> {
     }
   }
 
-  /// تعديل النقاط والرصيد المخزن معاً ثم رفع التغييرات
   Future<void> _editBalances(User u) async {
     final pts = TextEditingController(text: '${u.points}');
     final stored = TextEditingController(text: '${u.stored}');
@@ -240,26 +239,19 @@ class _UsersPageState extends State<UsersPage> {
         content: SizedBox(
           width: 320,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            TextField(
-                controller: pts,
-                keyboardType: TextInputType.number,
+            TextField(controller: pts, keyboardType: TextInputType.number,
                 style: const TextStyle(color: kInk, fontWeight: FontWeight.w700),
                 decoration: const InputDecoration(labelText: 'النقاط')),
             const SizedBox(height: 10),
-            TextField(
-                controller: stored,
-                keyboardType: TextInputType.number,
+            TextField(controller: stored, keyboardType: TextInputType.number,
                 style: const TextStyle(color: kInk, fontWeight: FontWeight.w700),
                 decoration: const InputDecoration(labelText: 'الرصيد المخزن')),
           ]),
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('إلغاء')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: kOrange, foregroundColor: Colors.black),
+            style: ElevatedButton.styleFrom(backgroundColor: kOrange, foregroundColor: Colors.black),
             onPressed: () => Navigator.pop(context, true),
             child: const Text('حفظ ورفع'),
           ),
@@ -273,8 +265,8 @@ class _UsersPageState extends State<UsersPage> {
     try {
       await Store.saveUsers(widget.token);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('تم تعديل النقاط والرصيد المخزن ورفع التغييرات ✅')));
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('تم تعديل النقاط والرصيد ورفع التغييرات ✅')));
       }
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
@@ -355,7 +347,7 @@ class _UsersPageState extends State<UsersPage> {
                                 builder: (_) => UserDialog(token: widget.token, users: _users, user: u));
                             setState(() {});
                           }),
-                      IconButton(tooltip: 'تعديل النقاط والرصيد المخزن', icon: const Icon(Icons.account_balance_wallet_outlined, color: kTeal, size: 20),
+                      IconButton(tooltip: 'تعديل النقاط والرصيد', icon: const Icon(Icons.account_balance_wallet_outlined, color: kTeal, size: 20),
                           onPressed: () => _editBalances(u)),
                       IconButton(tooltip: 'حذف', icon: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 18),
                           onPressed: () => _delete(u)),
@@ -534,7 +526,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
-  // حسابات صحيحة بالكامل (قواعد الأنواع المعتمدة)
+  // قواعد الأنواع: كل الحسابات بأعداد صحيحة
   int get _tRound => _total.round();
   int get _autoPoints => _tRound ~/ kPointUnit;
   int get _autoStored => _tRound % kPointUnit;
@@ -986,8 +978,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
       );
 
   Widget _row(int i, _Draft d) {
-    final price = double.tryParse(d.price.text) ?? 0;
-    final qty = int.tryParse(d.qty.text) ?? 0;
+    final double price = double.tryParse(d.price.text) ?? 0;
+    final int qty = int.tryParse(d.qty.text) ?? 0;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(children: [
