@@ -562,7 +562,7 @@ class InvoicesPage extends StatefulWidget {
 
 class _InvoicesPageState extends State<InvoicesPage> {
   bool _loading = true;
-  ExcelData? _xl;
+  ExcelData? _xl; // مخزن ملف الاكسل داخل الجلسة
   bool _refreshing = false;
   final _invNo = TextEditingController();
   String _fetchedType = '';
@@ -600,8 +600,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   @override
   void initState() {
     super.initState();
-    _init();
-    _autoExcel();
+    _init(); // لا جلب تلقائي للاكسل — فقط عند الطلب
   }
 
   Future<void> _init() async {
@@ -609,37 +608,32 @@ class _InvoicesPageState extends State<InvoicesPage> {
     if (mounted) setState(() => _loading = false);
   }
 
-  /// جلب تلقائي سلس لآخر ملف مرفوع (كاسر كاش يضمن الأحدث 100%)
-  Future<void> _autoExcel() async {
+  /// جلب ملف الاكسل: مرة واحدة ويخزن، أو إجباري عند زر تحديث
+  Future<bool> _ensureExcel({bool force = false}) async {
+    if (_xl != null && !force) return true;
     try {
       final r = await http
           .get(Uri.parse(
               '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}'))
-          .timeout(const Duration(seconds: 15));
-      if (r.statusCode == 200 && mounted) {
-        final d = parseFaworiExcel(r.bodyBytes);
-        setState(() => _xl = d);
-      }
-    } catch (_) {}
+          .timeout(const Duration(seconds: 20));
+      if (r.statusCode != 200) return false;
+      _xl = parseFaworiExcel(r.bodyBytes);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _refresh() async {
     setState(() => _refreshing = true);
-    try {
-      final r = await http.get(Uri.parse(
-          '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}'));
-      if (r.statusCode != 200) {
-        throw Exception('الملف غير موجود — ارفعه أولاً بزر رفع اكسل');
+    final ok = await _ensureExcel(force: true);
+    if (mounted) {
+      setState(() => _refreshing = false);
+      if (ok) {
+        _snack('تم التحديث من المستودع 100% ✅ ${_xl!.invoices.length} فاتورة و ${_xl!.materials.length} مادة فاوري');
+      } else {
+        _snack('تعذر الجلب — الملف غير موجود بالمستودع، ارفعه بزر رفع اكسل');
       }
-      final data = parseFaworiExcel(r.bodyBytes);
-      if (mounted) {
-        setState(() => _xl = data);
-        _snack('تم التحديث ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
-      }
-    } catch (e) {
-      if (mounted) _snack('Error: $e');
-    } finally {
-      if (mounted) setState(() => _refreshing = false);
     }
   }
 
@@ -652,26 +646,33 @@ class _InvoicesPageState extends State<InvoicesPage> {
     setState(() => _refreshing = true);
     try {
       await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
-      final data = parseFaworiExcel(bytes);
+      _xl = parseFaworiExcel(bytes);
       if (mounted) {
-        setState(() => _xl = data);
-        _snack('تم رفع الملف للمستودع وتحليله ✅');
+        setState(() => _refreshing = false);
+        _snack('تم رفع الملف للمستودع وتحليله وحفظه ✅');
       }
     } catch (e) {
-      if (mounted) _snack('Error: $e');
-    } finally {
-      if (mounted) setState(() => _refreshing = false);
+      if (mounted) {
+        setState(() => _refreshing = false);
+        _snack('Error: $e');
+      }
     }
   }
 
-  void _fetch() {
-    if (_xl == null) {
-      _snack('يجري جلب الملف تلقائياً… اضغط تحديث 🔄 إن تأخر');
-      _autoExcel();
+  Future<void> _fetch() async {
+    final no = _invNo.text.trim();
+    if (no.isEmpty) {
+      _snack('اكتب رقم الفاتورة أولاً');
       return;
     }
-    final no = _invNo.text.trim();
-    if (no.isEmpty) return;
+    setState(() => _refreshing = true);
+    final ok = await _ensureExcel(); // يجلب مرة واحدة ويخزن
+    if (!mounted) return;
+    setState(() => _refreshing = false);
+    if (!ok) {
+      _snack('الملف غير موجود — ارفعه بزر رفع اكسل ثم اضغط تحديث');
+      return;
+    }
     final match = _xl!.invoices.where((i) => i.no.trim() == no).toList();
     if (match.isEmpty) {
       _snack('لا توجد فاتورة بالرقم $no');
@@ -720,7 +721,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 icon: const Icon(Icons.upload_file_rounded),
                 onPressed: _refreshing ? null : _upload),
             IconButton(
-                tooltip: 'تحديث الملف من المستودع',
+                tooltip: 'تحديث الملف من المستودع 100%',
                 icon: _refreshing
                     ? const SizedBox(width: 20, height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
@@ -875,8 +876,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                   backgroundColor: kTeal, foregroundColor: Colors.black),
-              onPressed: _fetch,
-              icon: const Icon(Icons.download_rounded, size: 18),
+              onPressed: _refreshing ? null : _fetch,
+              icon: _refreshing
+                  ? const SizedBox(width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                  : const Icon(Icons.download_rounded, size: 18),
               label: const Text('جلب', style: TextStyle(fontWeight: FontWeight.w800)),
             ),
             if (_fetchedType.isNotEmpty) ...[
@@ -1092,7 +1096,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   }
 }
 
-// ================= محرر الفاتورة الشامل =================
+// ================= محرر الفاتورة الشامل (حساب مباشر) =================
 class InvoiceEditor extends StatefulWidget {
   final String token;
   final Invoice invoice;
@@ -1116,10 +1120,6 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
             : it.price.toStringAsFixed(2)
         ..qty.text = '${it.qty}')
       .toList();
-  late final TextEditingController _points =
-      TextEditingController(text: '${widget.invoice.points.abs()}');
-  late final TextEditingController _stored =
-      TextEditingController(text: '${widget.invoice.stored.abs()}');
   String _query = '';
   bool _busy = false;
 
@@ -1139,11 +1139,28 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
-  User? get _user =>
-      Store.users.where((u) => u.id == _userId).toList().firstOrNull;
+  // حساب مباشر ولحظي من الإجمالي
+  int get _tRound => _total.round();
+  int get _livePts => _tRound ~/ kPointUnit;
+  int get _liveRem => _tRound % kPointUnit;
+
+  User? get _user {
+    final m = Store.users.where((u) => u.id == _userId).toList();
+    return m.isEmpty ? null : m.first;
+  }
 
   void _snack(String m) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  Widget _liveRow(String label, String value, Color color) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          Text(label, style: _inkBold),
+          const Spacer(),
+          Text(value,
+              style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16)),
+        ]),
+      );
 
   Future<void> _save() async {
     final u = _user;
@@ -1164,8 +1181,8 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
     }
     setState(() => _busy = true);
     try {
-      final int pts = int.tryParse(_points.text) ?? (_total.round() ~/ kPointUnit);
-      final int rem = int.tryParse(_stored.text) ?? (_total.round() % kPointUnit);
+      final int pts = _livePts;
+      final int rem = _liveRem;
       final int signed = _isReturn ? -pts : pts;
       final int signedStored = _isReturn ? -rem : rem;
       final old = widget.invoice;
@@ -1175,7 +1192,7 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
         oldU.first.points = _clamp(oldU.first.points - old.points);
         oldU.first.stored = _clamp(oldU.first.stored - old.stored);
       }
-      // تطبيق التأثير الجديد على العميل الجديد
+      // تطبيق التأثير الجديد المحسوب مباشرة من الإجمالي
       u.points = _clamp(u.points + signed);
       u.stored = _clamp(u.stored + signedStored);
       final neu = Invoice(
@@ -1198,7 +1215,7 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
       await Future.delayed(const Duration(milliseconds: 900));
       await Store.saveInvoices(widget.token);
       if (!mounted) return;
-      _snack('تم تعديل الفاتورة ورفعها للمستودع والجوال ✅');
+      _snack('تم حفظ التعديلات: النقاط ${signed >= 0 ? '+' : ''}$signed والرصيد المخزن $signedStored ✅');
       Navigator.pop(context, true);
     } catch (e) {
       if (mounted) {
@@ -1347,43 +1364,12 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
                   ),
                 ),
                 const Divider(),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Row(children: [
-                    Text('التكلفة الإجمالية', style: _inkBold),
-                    const Spacer(),
-                    Text(fmt(_total.round()),
-                        style: const TextStyle(
-                            color: kInk, fontWeight: FontWeight.w900, fontSize: 16)),
-                  ]),
-                ),
-                Row(children: [
-                  Text('نقاط الفاتورة', style: _inkBold),
-                  const Spacer(),
-                  SizedBox(
-                    width: 90,
-                    child: TextField(
-                        controller: _points,
-                        keyboardType: TextInputType.number,
-                        style: _inputDark,
-                        decoration: const InputDecoration(isDense: true),
-                        onChanged: (_) => setState(() {})),
-                  ),
-                ]),
-                const SizedBox(height: 8),
-                Row(children: [
-                  Text('رصيد مخزن من الفاتورة', style: _inkBold),
-                  const Spacer(),
-                  SizedBox(
-                    width: 90,
-                    child: TextField(
-                        controller: _stored,
-                        keyboardType: TextInputType.number,
-                        style: _inputDark,
-                        decoration: const InputDecoration(isDense: true),
-                        onChanged: (_) => setState(() {})),
-                  ),
-                ]),
+                _liveRow('التكلفة الإجمالية', fmt(_tRound), kInk),
+                _liveRow(
+                    'نقاط الفاتورة (مباشرة من الإجمالي)',
+                    '${_isReturn ? '-' : '+'}${fmt(_livePts)}',
+                    kTeal),
+                _liveRow('رصيد مخزن من الفاتورة (مباشر)', fmt(_liveRem), kInk),
                 const SizedBox(height: 14),
                 SizedBox(
                   width: double.infinity,
