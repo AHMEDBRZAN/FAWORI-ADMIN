@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -6,6 +8,9 @@ import 'package:http/http.dart' as http;
 import 'data.dart';
 import 'excel_service.dart';
 import 'extra.dart';
+
+const int _BIG = 1000000000;
+int _clamp(int v) => v.clamp(0, _BIG);
 
 void main() => runApp(const AdminApp());
 
@@ -137,6 +142,8 @@ class _HomeState extends State<Home> {
                     icon: Icon(Icons.redeem_rounded), label: Text('الهدايا')),
                 NavigationRailDestination(
                     icon: Icon(Icons.code_rounded), label: Text('الأكواد')),
+                NavigationRailDestination(
+                    icon: Icon(Icons.history_rounded), label: Text('فواتير سابقة')),
               ],
             ),
             const VerticalDivider(width: 1),
@@ -144,10 +151,14 @@ class _HomeState extends State<Home> {
               child: _page == 0
                   ? UsersPage(token: widget.token)
                   : _page == 1
-                      ? InvoicesPage(token: widget.token)
+                      ? InvoicesPage(
+                          token: widget.token,
+                          onArchive: () => setState(() => _page = 4))
                       : _page == 2
                           ? GiftsPage(token: widget.token)
-                          : CodeFilesPage(token: widget.token),
+                          : _page == 3
+                              ? CodeFilesPage(token: widget.token)
+                              : ArchivePage(token: widget.token),
             ),
           ],
         ),
@@ -215,7 +226,7 @@ class _UsersPageState extends State<UsersPage> {
       ),
     );
     if (n == null || n == 0) return;
-    u.points += n;
+    u.points = _clamp(u.points + n);
     setState(() {});
     try {
       await Store.saveUsers(widget.token);
@@ -259,8 +270,8 @@ class _UsersPageState extends State<UsersPage> {
       ),
     );
     if (ok != true) return;
-    u.points = int.tryParse(pts.text) ?? u.points;
-    u.stored = int.tryParse(stored.text) ?? u.stored;
+    u.points = _clamp(int.tryParse(pts.text) ?? u.points);
+    u.stored = _clamp(int.tryParse(stored.text) ?? u.stored);
     setState(() {});
     try {
       await Store.saveUsers(widget.token);
@@ -516,9 +527,35 @@ class _Draft {
   final TextEditingController qty = TextEditingController(text: '1');
 }
 
+/// حذف فاتورة مع عكس نقاطها ورصيدها من العميل ورفع الملفين
+Future<bool> deleteInvoiceReverse(
+    BuildContext context, String token, Invoice inv) async {
+  if (!await confirmDialog(context, 'حذف الفاتورة وعكس نقاطها ورصيدها من العميل؟')) {
+    return false;
+  }
+  final u = Store.users.where((x) => x.id == inv.userId).toList();
+  if (u.isNotEmpty) {
+    u.first.points = _clamp(u.first.points - inv.points);
+    u.first.stored = _clamp(u.first.stored - inv.stored);
+  }
+  Store.invoices.remove(inv);
+  try {
+    await Store.saveUsers(token);
+    await Future.delayed(const Duration(milliseconds: 900));
+    await Store.saveInvoices(token);
+    return true;
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+    return false;
+  }
+}
+
 class InvoicesPage extends StatefulWidget {
   final String token;
-  const InvoicesPage({super.key, required this.token});
+  final VoidCallback? onArchive;
+  const InvoicesPage({super.key, required this.token, this.onArchive});
   @override
   State<InvoicesPage> createState() => _InvoicesPageState();
 }
@@ -564,11 +601,26 @@ class _InvoicesPageState extends State<InvoicesPage> {
   void initState() {
     super.initState();
     _init();
+    _autoExcel();
   }
 
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
     if (mounted) setState(() => _loading = false);
+  }
+
+  /// جلب تلقائي سلس لآخر ملف مرفوع (كاسر كاش يضمن الأحدث 100%)
+  Future<void> _autoExcel() async {
+    try {
+      final r = await http
+          .get(Uri.parse(
+              '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}'))
+          .timeout(const Duration(seconds: 15));
+      if (r.statusCode == 200 && mounted) {
+        final d = parseFaworiExcel(r.bodyBytes);
+        setState(() => _xl = d);
+      }
+    } catch (_) {}
   }
 
   Future<void> _refresh() async {
@@ -614,7 +666,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
 
   void _fetch() {
     if (_xl == null) {
-      _snack('اضغط زر التحديث 🔄 أولاً لجلب ملف الاكسل');
+      _snack('يجري جلب الملف تلقائياً… اضغط تحديث 🔄 إن تأخر');
+      _autoExcel();
       return;
     }
     final no = _invNo.text.trim();
@@ -641,79 +694,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
       if (_items.isEmpty) _items.add(_Draft());
     });
     _snack('تم جلب ${fawori.length} مادة فاوري (${_isReturn ? 'مرتجع — تُخصم النقاط' : 'مبيع — تُضاف النقاط'})');
-  }
-
-  Future<void> _deleteInv(Invoice inv) async {
-    if (!await confirmDialog(context, 'حذف الفاتورة وعكس نقاطها ورصيدها من العميل؟')) return;
-    final owner = _users.where((x) => x.id == inv.userId).toList();
-    if (owner.isNotEmpty) {
-      owner.first.points = (owner.first.points - inv.points).clamp(0, 1000000000);
-      owner.first.stored = (owner.first.stored - inv.stored).clamp(0, 1000000000);
-    }
-    Store.invoices.remove(inv);
-    setState(() {});
-    try {
-      await Store.saveUsers(widget.token);
-      await Future.delayed(const Duration(milliseconds: 800));
-      await Store.saveInvoices(widget.token);
-      if (mounted) _snack('تم الحذف وعكس النقاط والرصيد ✅');
-    } catch (e) {
-      if (mounted) _snack('Error: $e');
-    }
-  }
-
-  Future<void> _editInv(Invoice inv) async {
-    final isRet = inv.type == 'return' || inv.points < 0;
-    final tot = TextEditingController(text: inv.total.toStringAsFixed(0));
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: kCard,
-        title: Text('تعديل فاتورة ${isRet ? 'مرتجع' : 'مبيع'}'),
-        content: SizedBox(
-          width: 320,
-          child: TextField(controller: tot, keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'الإجمالي')),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: kOrange, foregroundColor: Colors.black),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('حفظ'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final int t = (double.tryParse(tot.text) ?? inv.total).round();
-    final int newPts = t ~/ kPointUnit;
-    final int newRem = t % kPointUnit;
-    final int dP = newPts - inv.points.abs();
-    final int dR = newRem - inv.stored.abs();
-    final owner = _users.where((x) => x.id == inv.userId).toList();
-    if (owner.isNotEmpty) {
-      final o = owner.first;
-      if (isRet) {
-        o.points = (o.points - dP).clamp(0, 1000000000);
-        o.stored = (o.stored - dR).clamp(0, 1000000000);
-      } else {
-        o.points += dP;
-        o.stored += dR;
-      }
-    }
-    inv.total = t.toDouble();
-    inv.points = isRet ? -newPts : newPts;
-    inv.stored = isRet ? -newRem : newRem;
-    setState(() {});
-    try {
-      await Store.saveUsers(widget.token);
-      await Future.delayed(const Duration(milliseconds: 800));
-      await Store.saveInvoices(widget.token);
-      if (mounted) _snack('تم تعديل الفاتورة وتحديث النقاط والرصيد ✅');
-    } catch (e) {
-      if (mounted) _snack('Error: $e');
-    }
   }
 
   String _userName(String id) {
@@ -755,82 +735,86 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 children: [
                   _invoiceCard(),
                   const SizedBox(height: 24),
-                  const Text('آخر الفواتير',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                  Row(children: [
+                    const Text('آخر الفواتير (آخر 5)',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                    const Spacer(),
+                    if (widget.onArchive != null)
+                      TextButton.icon(
+                          onPressed: widget.onArchive,
+                          icon: const Icon(Icons.history_rounded, size: 18),
+                          label: const Text('كل الفواتير السابقة')),
+                  ]),
                   const SizedBox(height: 10),
-                  ...(_invs.reversed.toList()).map((inv) {
-                    final neg = inv.points < 0;
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12)),
-                      child: Row(children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(_userName(inv.userId),
-                                  style: const TextStyle(
-                                      color: kInk,
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 14)),
-                              const SizedBox(height: 2),
-                              Text('${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}  •  رقم ${inv.no.isEmpty ? '—' : inv.no}',
-                                  style: TextStyle(
-                                      color: Colors.grey.shade600, fontSize: 11)),
-                              const SizedBox(height: 4),
-                              Text(
-                                  inv.items.map((e) => '${e.name} ×${e.qty}').join('، '),
-                                  style: TextStyle(
-                                      color: Colors.grey.shade700, fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        Column(children: [
-                          Text(fmt(inv.total),
-                              style: const TextStyle(
-                                  color: kInk,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 16)),
-                          const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                                color: neg
-                                    ? Colors.red.withAlpha(30)
-                                    : kTeal.withAlpha(30),
-                                borderRadius: BorderRadius.circular(8)),
-                            child: Text(
-                                neg ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
-                                style: TextStyle(
-                                    color: neg ? Colors.red : kTeal,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 12)),
-                          ),
-                          const SizedBox(height: 4),
-                          Text('مخزن: ${fmt(inv.stored)}',
-                              style: TextStyle(
-                                  color: Colors.grey.shade600, fontSize: 10)),
-                        ]),
-                        IconButton(
-                            tooltip: 'تعديل',
-                            icon: const Icon(Icons.edit_rounded,
-                                color: kOrange, size: 18),
-                            onPressed: () => _editInv(inv)),
-                        IconButton(
-                            tooltip: 'حذف',
-                            icon: const Icon(Icons.delete_outline_rounded,
-                                color: Colors.red, size: 18),
-                            onPressed: () => _deleteInv(inv)),
-                      ]),
-                    );
-                  }),
+                  ...(_invs.reversed.take(5).toList()).map((inv) => _invTile(inv)),
                 ],
               ),
       );
+
+  Widget _invTile(Invoice inv) {
+    final neg = inv.points < 0;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: Colors.white, borderRadius: BorderRadius.circular(12)),
+      child: Row(children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_userName(inv.userId),
+                  style: const TextStyle(
+                      color: kInk, fontWeight: FontWeight.w800, fontSize: 14)),
+              const SizedBox(height: 2),
+              Text('${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}  •  رقم ${inv.no.isEmpty ? '—' : inv.no}',
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 11)),
+              const SizedBox(height: 4),
+              Text(inv.items.map((e) => '${e.name} ×${e.qty}').join('، '),
+                  style: TextStyle(color: Colors.grey.shade700, fontSize: 12)),
+            ],
+          ),
+        ),
+        Column(children: [
+          Text(fmt(inv.total),
+              style: const TextStyle(
+                  color: kInk, fontWeight: FontWeight.w900, fontSize: 16)),
+          const SizedBox(height: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+                color: neg ? Colors.red.withAlpha(30) : kTeal.withAlpha(30),
+                borderRadius: BorderRadius.circular(8)),
+            child: Text(neg ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
+                style: TextStyle(
+                    color: neg ? Colors.red : kTeal,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 12)),
+          ),
+          const SizedBox(height: 4),
+          Text('مخزن: ${fmt(inv.stored)}',
+              style: TextStyle(color: Colors.grey.shade600, fontSize: 10)),
+        ]),
+        IconButton(
+            tooltip: 'تعديل شامل',
+            icon: const Icon(Icons.edit_rounded, color: kOrange, size: 18),
+            onPressed: () async {
+              final r = await Navigator.push<bool>(context,
+                  MaterialPageRoute(
+                      builder: (_) =>
+                          InvoiceEditor(token: widget.token, invoice: inv)));
+              if (r == true) setState(() {});
+            }),
+        IconButton(
+            tooltip: 'حذف',
+            icon: const Icon(Icons.delete_outline_rounded, color: Colors.red, size: 18),
+            onPressed: () async {
+              final ok = await deleteInvoiceReverse(context, widget.token, inv);
+              if (ok) setState(() {});
+            }),
+      ]),
+    );
+  }
 
   Widget _invoiceCard() => Container(
         padding: const EdgeInsets.all(18),
@@ -1068,13 +1052,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
       if (_isReturn) {
         signed = -pts;
         signedStored = -rem;
-        _selected!.points = (_selected!.points - pts).clamp(0, 1000000000);
-        _selected!.stored = (_selected!.stored - rem).clamp(0, 1000000000);
+        _selected!.points = _clamp(_selected!.points - pts);
+        _selected!.stored = _clamp(_selected!.stored - rem);
       } else {
         signed = pts;
         signedStored = rem;
-        _selected!.points += pts;
-        _selected!.stored += rem;
+        _selected!.points = _clamp(_selected!.points + pts);
+        _selected!.stored = _clamp(_selected!.stored + rem);
       }
       Store.invoices.add(Invoice(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -1086,12 +1070,9 @@ class _InvoicesPageState extends State<InvoicesPage> {
           points: signed,
           stored: signedStored,
           items: items));
-      // المستخدمون أولاً ثم الفواتير مع فاصل زمني لمنع تعارض الـ commits
       await Store.saveUsers(widget.token);
       await Future.delayed(const Duration(milliseconds: 900));
       await Store.saveInvoices(widget.token);
-      await Future.delayed(const Duration(milliseconds: 900));
-      await Store.load();
       if (!mounted) return;
       _snack('تم الحفظ ونقل للجوال: الفاتورة رقم ${_invNo.text.trim()} | النقاط ${signed >= 0 ? '+' : ''}$signed | الرصيد المخزن $signedStored ✅');
       setState(() {
@@ -1111,23 +1092,564 @@ class _InvoicesPageState extends State<InvoicesPage> {
   }
 }
 
+// ================= محرر الفاتورة الشامل =================
+class InvoiceEditor extends StatefulWidget {
+  final String token;
+  final Invoice invoice;
+  const InvoiceEditor({super.key, required this.token, required this.invoice});
+  @override
+  State<InvoiceEditor> createState() => _InvoiceEditorState();
+}
+
+class _InvoiceEditorState extends State<InvoiceEditor> {
+  late String _userId = widget.invoice.userId;
+  late final TextEditingController _no =
+      TextEditingController(text: widget.invoice.no);
+  late final TextEditingController _date =
+      TextEditingController(text: widget.invoice.date);
+  late String _type = widget.invoice.type;
+  late final List<_Draft> _items = widget.invoice.items
+      .map((it) => _Draft()
+        ..name.text = it.name
+        ..price.text = it.price == it.price.roundToDouble()
+            ? it.price.toStringAsFixed(0)
+            : it.price.toStringAsFixed(2)
+        ..qty.text = '${it.qty}')
+      .toList();
+  late final TextEditingController _points =
+      TextEditingController(text: '${widget.invoice.points.abs()}');
+  late final TextEditingController _stored =
+      TextEditingController(text: '${widget.invoice.stored.abs()}');
+  String _query = '';
+  bool _busy = false;
+
+  static const TextStyle _inkBold =
+      TextStyle(color: kInk, fontWeight: FontWeight.w800, fontSize: 14);
+  static const TextStyle _hintDark =
+      TextStyle(color: Color(0xFF7A8699), fontWeight: FontWeight.w600);
+  static const TextStyle _inputDark =
+      TextStyle(color: kInk, fontWeight: FontWeight.w700);
+
+  bool get _isReturn => _type == 'return';
+
+  double get _total => _items.fold<double>(
+      0,
+      (s, d) =>
+          s +
+          (double.tryParse(d.price.text) ?? 0) *
+              (int.tryParse(d.qty.text) ?? 0));
+
+  User? get _user =>
+      Store.users.where((u) => u.id == _userId).toList().firstOrNull;
+
+  void _snack(String m) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+
+  Future<void> _save() async {
+    final u = _user;
+    if (u == null) {
+      _snack('اختر العميل أولاً');
+      return;
+    }
+    final items = _items
+        .where((d) => d.name.text.trim().isNotEmpty)
+        .map((d) => InvoiceItem(
+            name: d.name.text.trim(),
+            price: double.tryParse(d.price.text) ?? 0,
+            qty: int.tryParse(d.qty.text) ?? 1))
+        .toList();
+    if (items.isEmpty) {
+      _snack('أضف مادة واحدة على الأقل');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final int pts = int.tryParse(_points.text) ?? (_total.round() ~/ kPointUnit);
+      final int rem = int.tryParse(_stored.text) ?? (_total.round() % kPointUnit);
+      final int signed = _isReturn ? -pts : pts;
+      final int signedStored = _isReturn ? -rem : rem;
+      final old = widget.invoice;
+      // عكس تأثير الفاتورة القديمة من عميلها القديم
+      final oldU = Store.users.where((x) => x.id == old.userId).toList();
+      if (oldU.isNotEmpty) {
+        oldU.first.points = _clamp(oldU.first.points - old.points);
+        oldU.first.stored = _clamp(oldU.first.stored - old.stored);
+      }
+      // تطبيق التأثير الجديد على العميل الجديد
+      u.points = _clamp(u.points + signed);
+      u.stored = _clamp(u.stored + signedStored);
+      final neu = Invoice(
+          id: old.id,
+          no: _no.text.trim(),
+          userId: _userId,
+          date: _date.text.trim(),
+          type: _type,
+          total: _total,
+          points: signed,
+          stored: signedStored,
+          items: items);
+      final idx = Store.invoices.indexWhere((x) => x.id == old.id);
+      if (idx >= 0) {
+        Store.invoices[idx] = neu;
+      } else {
+        Store.invoices.add(neu);
+      }
+      await Store.saveUsers(widget.token);
+      await Future.delayed(const Duration(milliseconds: 900));
+      await Store.saveInvoices(widget.token);
+      if (!mounted) return;
+      _snack('تم تعديل الفاتورة ورفعها للمستودع والجوال ✅');
+      Navigator.pop(context, true);
+    } catch (e) {
+      if (mounted) {
+        _snack('Error: $e');
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(
+          title: const Text('تعديل شامل للفاتورة'),
+          actions: [
+            _busy
+                ? const Padding(
+                    padding: EdgeInsets.all(14),
+                    child: SizedBox(width: 20, height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2)))
+                : IconButton(
+                    icon: const Icon(Icons.cloud_upload_outlined),
+                    onPressed: _save),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                  color: Colors.white, borderRadius: BorderRadius.circular(18)),
+              child: Column(children: [
+                Row(children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _no,
+                      style: _inputDark,
+                      decoration: const InputDecoration(
+                          labelText: 'رقم الفاتورة',
+                          labelStyle: _hintDark,
+                          filled: true,
+                          fillColor: Color(0xFFF4F6F8)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _date,
+                      style: _inputDark,
+                      decoration: const InputDecoration(
+                          labelText: 'التاريخ (YYYY-MM-DD)',
+                          labelStyle: _hintDark,
+                          filled: true,
+                          fillColor: Color(0xFFF4F6F8)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: DropdownButtonFormField<String>(
+                      value: _type,
+                      dropdownColor: const Color(0xFFF4F6F8),
+                      decoration: const InputDecoration(
+                          labelText: 'النوع',
+                          labelStyle: _hintDark,
+                          filled: true,
+                          fillColor: Color(0xFFF4F6F8)),
+                      items: const [
+                        DropdownMenuItem(value: 'sale', child: Text('مبيع')),
+                        DropdownMenuItem(value: 'return', child: Text('مرتجع مبيع')),
+                      ],
+                      onChanged: (v) => setState(() => _type = v ?? 'sale'),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 14),
+                if (_user == null)
+                  const Text('اختر العميل بالأسفل',
+                      style: TextStyle(color: Colors.red, fontWeight: FontWeight.w700))
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                        color: kTeal.withAlpha(30),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text('العميل: ${_user!.name} (${_user!.phone})',
+                          style: const TextStyle(
+                              color: kInk, fontWeight: FontWeight.w800)),
+                    ]),
+                  ),
+                const SizedBox(height: 10),
+                TextField(
+                  onChanged: (v) => setState(() => _query = v),
+                  style: _inputDark,
+                  decoration: const InputDecoration(
+                      labelText: 'تغيير العميل: ابحث بالاسم أو الرقم...',
+                      labelStyle: _hintDark,
+                      hintStyle: _hintDark,
+                      filled: true,
+                      fillColor: Color(0xFFF4F6F8)),
+                ),
+                if (_query.trim().isNotEmpty)
+                  Container(
+                    constraints: const BoxConstraints(maxHeight: 170),
+                    color: const Color(0xFFF4F6F8),
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: Store.users
+                          .where((u) =>
+                              u.name.contains(_query) || u.phone.contains(_query))
+                          .map((u) => ListTile(
+                                dense: true,
+                                title: Text(u.name,
+                                    style: const TextStyle(
+                                        color: kInk, fontWeight: FontWeight.w700)),
+                                subtitle: Text(u.phone,
+                                    style: const TextStyle(
+                                        fontSize: 11, color: Color(0xFF7A8699))),
+                                onTap: () =>
+                                    setState(() { _userId = u.id; _query = ''; }),
+                              ))
+                          .toList(),
+                    ),
+                  ),
+                const SizedBox(height: 14),
+                Container(
+                  color: kOrange,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(children: const [
+                    SizedBox(width: 30, child: Center(child: Text('NO', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
+                    Expanded(child: Center(child: Text('اسم الصنف', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800)))),
+                    SizedBox(width: 70, child: Center(child: Text('سعر القطعة', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 10)))),
+                    SizedBox(width: 46, child: Center(child: Text('العدد', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
+                    SizedBox(width: 70, child: Center(child: Text('المجموع', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800, fontSize: 11)))),
+                    SizedBox(width: 34),
+                  ]),
+                ),
+                ...List.generate(_items.length, (i) => _editRow(i, _items[i])),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => setState(() => _items.add(_Draft())),
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('إضافة مادة',
+                        style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+                  ),
+                ),
+                const Divider(),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6),
+                  child: Row(children: [
+                    Text('التكلفة الإجمالية', style: _inkBold),
+                    const Spacer(),
+                    Text(fmt(_total.round()),
+                        style: const TextStyle(
+                            color: kInk, fontWeight: FontWeight.w900, fontSize: 16)),
+                  ]),
+                ),
+                Row(children: [
+                  Text('نقاط الفاتورة', style: _inkBold),
+                  const Spacer(),
+                  SizedBox(
+                    width: 90,
+                    child: TextField(
+                        controller: _points,
+                        keyboardType: TextInputType.number,
+                        style: _inputDark,
+                        decoration: const InputDecoration(isDense: true),
+                        onChanged: (_) => setState(() {})),
+                  ),
+                ]),
+                const SizedBox(height: 8),
+                Row(children: [
+                  Text('رصيد مخزن من الفاتورة', style: _inkBold),
+                  const Spacer(),
+                  SizedBox(
+                    width: 90,
+                    child: TextField(
+                        controller: _stored,
+                        keyboardType: TextInputType.number,
+                        style: _inputDark,
+                        decoration: const InputDecoration(isDense: true),
+                        onChanged: (_) => setState(() {})),
+                  ),
+                ]),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: _isReturn ? Colors.red : kOrange,
+                        foregroundColor: _isReturn ? Colors.white : Colors.black,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12))),
+                    onPressed: _busy ? null : _save,
+                    child: Text(
+                        _isReturn
+                            ? 'حفظ المرتجع (خصم النقاط)'
+                            : 'حفظ التعديلات (إضافة النقاط)',
+                        style: const TextStyle(fontWeight: FontWeight.w800)),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ),
+      );
+
+  Widget _editRow(int i, _Draft d) {
+    final double price = double.tryParse(d.price.text) ?? 0;
+    final int qty = int.tryParse(d.qty.text) ?? 0;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        SizedBox(width: 30, child: Center(child: Text('${i + 1}', style: const TextStyle(color: kInk, fontSize: 12, fontWeight: FontWeight.w700)))),
+        const SizedBox(width: 6),
+        Expanded(
+            child: TextField(
+                controller: d.name,
+                style: _inputDark,
+                decoration: const InputDecoration(isDense: true))),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 70,
+          child: TextField(
+              controller: d.price,
+              keyboardType: TextInputType.number,
+              style: _inputDark,
+              decoration: const InputDecoration(isDense: true),
+              onChanged: (_) => setState(() {})),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 46,
+          child: TextField(
+              controller: d.qty,
+              keyboardType: TextInputType.number,
+              style: _inputDark,
+              decoration: const InputDecoration(isDense: true),
+              onChanged: (_) => setState(() {})),
+        ),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 70,
+          child: Center(
+              child: Text(fmt(price * qty),
+                  style: const TextStyle(color: kInk, fontWeight: FontWeight.w800, fontSize: 12))),
+        ),
+        SizedBox(
+          width: 34,
+          child: IconButton(
+              padding: EdgeInsets.zero,
+              icon: const Icon(Icons.delete_outline_rounded,
+                  color: Colors.red, size: 18),
+              onPressed: _items.length > 1
+                  ? () => setState(() => _items.remove(d))
+                  : null),
+        ),
+      ]),
+    );
+  }
+}
+
+// ================= فواتير سابقة (الأرشيف) =================
+class ArchivePage extends StatefulWidget {
+  final String token;
+  const ArchivePage({super.key, required this.token});
+  @override
+  State<ArchivePage> createState() => _ArchivePageState();
+}
+
+class _ArchivePageState extends State<ArchivePage> {
+  final _q = TextEditingController();
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    if (!Store.loaded) await Store.load();
+    if (mounted) setState(() => _loading = false);
+  }
+
+  String _userName(String id) {
+    final m = Store.users.where((u) => u.id == id);
+    return m.isEmpty ? '—' : m.first.name;
+  }
+
+  String _userPhone(String id) {
+    final m = Store.users.where((u) => u.id == id);
+    return m.isEmpty ? '' : m.first.phone;
+  }
+
+  List<Invoice> get _filtered {
+    final q = _q.text.trim();
+    final all = Store.invoices.reversed.toList();
+    if (q.isEmpty) return all;
+    return all
+        .where((i) =>
+            _userName(i.userId).contains(q) ||
+            _userPhone(i.userId).contains(q) ||
+            i.no.contains(q) ||
+            i.date.contains(q))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('فواتير سابقة')),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: kOrange))
+            : ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  TextField(
+                    controller: _q,
+                    onChanged: (_) => setState(() {}),
+                    style: const TextStyle(color: kInk, fontWeight: FontWeight.w700),
+                    decoration: const InputDecoration(
+                        labelText: 'بحث ذكي: اسم العميل / رقم الهاتف / رقم الفاتورة / التاريخ',
+                        labelStyle: TextStyle(color: Color(0xFF7A8699)),
+                        hintStyle: TextStyle(color: Color(0xFF7A8699)),
+                        prefixIcon: Icon(Icons.search_rounded, color: kTeal),
+                        filled: true,
+                        fillColor: Colors.white),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('${_filtered.length} فاتورة',
+                      style: const TextStyle(
+                          color: Colors.grey, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  ..._filtered.map((inv) {
+                    final neg = inv.points < 0;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Row(children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_userName(inv.userId),
+                                  style: const TextStyle(
+                                      color: kInk,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14)),
+                              const SizedBox(height: 2),
+                              Text(
+                                  '${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}  •  رقم ${inv.no.isEmpty ? '—' : inv.no}  •  ${_userPhone(inv.userId)}',
+                                  style: TextStyle(
+                                      color: Colors.grey.shade600, fontSize: 11)),
+                              const SizedBox(height: 4),
+                              Text(
+                                  inv.items
+                                      .map((e) => '${e.name} ×${e.qty}')
+                                      .join('، '),
+                                  style: TextStyle(
+                                      color: Colors.grey.shade700, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        Column(children: [
+                          Text(fmt(inv.total),
+                              style: const TextStyle(
+                                  color: kInk,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16)),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                                color: neg
+                                    ? Colors.red.withAlpha(30)
+                                    : kTeal.withAlpha(30),
+                                borderRadius: BorderRadius.circular(8)),
+                            child: Text(
+                                neg ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
+                                style: TextStyle(
+                                    color: neg ? Colors.red : kTeal,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12)),
+                          ),
+                          const SizedBox(height: 4),
+                          Text('مخزن: ${fmt(inv.stored)}',
+                              style: TextStyle(
+                                  color: Colors.grey.shade600, fontSize: 10)),
+                        ]),
+                        IconButton(
+                            tooltip: 'تعديل شامل',
+                            icon: const Icon(Icons.edit_rounded,
+                                color: kOrange, size: 18),
+                            onPressed: () async {
+                              final r = await Navigator.push<bool>(context,
+                                  MaterialPageRoute(
+                                      builder: (_) => InvoiceEditor(
+                                          token: widget.token, invoice: inv)));
+                              if (r == true) setState(() {});
+                            }),
+                        IconButton(
+                            tooltip: 'حذف',
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                color: Colors.red, size: 18),
+                            onPressed: () async {
+                              final ok = await deleteInvoiceReverse(
+                                  context, widget.token, inv);
+                              if (ok) setState(() {});
+                            }),
+                      ]),
+                    );
+                  }),
+                ],
+              ),
+      );
+}
+
 // ================= الأكواد (جوال + كمبيوتر) =================
-class CodeFilesPage extends StatelessWidget {
+class CodeFilesPage extends StatefulWidget {
   final String token;
   const CodeFilesPage({super.key, required this.token});
+  @override
+  State<CodeFilesPage> createState() => _CodeFilesPageState();
+}
 
-  static const List<String> mobileFiles = [
+class _CodeFilesPageState extends State<CodeFilesPage> {
+  List<String>? _mobile;
+  List<String>? _admin;
+  bool _loading = true;
+
+  static const List<String> _fallbackMobile = [
     'lib/main.dart',
     'lib/core/app_settings.dart',
     'lib/core/strings.dart',
     'lib/core/theme.dart',
     'lib/core/store_service.dart',
     'lib/core/gifts_service.dart',
+    'lib/core/locked_dialog.dart',
+    'lib/data/sample_data.dart',
     'lib/screens/login_screen.dart',
     'lib/screens/main_screen.dart',
     'lib/screens/home_screen.dart',
     'lib/screens/products_screen.dart',
     'lib/screens/settings_screen.dart',
+    'lib/screens/profile_screen.dart',
     'lib/screens/simple_screens.dart',
     'lib/screens/about_screen.dart',
     'lib/widgets/bottom_nav.dart',
@@ -1138,7 +1660,7 @@ class CodeFilesPage extends StatelessWidget {
     'web/index.html',
   ];
 
-  static const List<String> adminFiles = [
+  static const List<String> _fallbackAdmin = [
     'lib/main.dart',
     'lib/data.dart',
     'lib/excel_service.dart',
@@ -1148,22 +1670,83 @@ class CodeFilesPage extends StatelessWidget {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _loadLists();
+  }
+
+  Future<List<String>> _fetchTree(String repo) async {
+    final r = await http.get(
+        Uri.parse(
+            'https://api.github.com/repos/$kOwner/$repo/git/trees/$kBranch?recursive=1'),
+        headers: GH.headers(widget.token));
+    if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
+    final List<dynamic> tree = jsonDecode(r.body)['tree'] as List<dynamic>;
+    final files = tree
+        .where((e) => e['type'] == 'blob')
+        .map((e) => e['path'] as String)
+        .where((p) =>
+            p.startsWith('lib/') ||
+            p.startsWith('web/') ||
+            p.startsWith('.github/') ||
+            p == 'pubspec.yaml')
+        .toList()
+      ..sort();
+    if (files.isEmpty) throw Exception('empty');
+    return files;
+  }
+
+  Future<void> _loadLists() async {
+    List<String> m = _fallbackMobile;
+    List<String> a = _fallbackAdmin;
+    try {
+      m = await _fetchTree(kRepo);
+    } catch (_) {}
+    try {
+      a = await _fetchTree(kAdminRepo);
+    } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _mobile = m;
+        _admin = a;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('الأكواد')),
-        body: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            const Text('📱 أكواد تطبيق الجوال (FAWORI)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kTeal)),
-            const SizedBox(height: 10),
-            ...mobileFiles.map((f) => _tile(context, f, kRepo)),
-            const SizedBox(height: 24),
-            const Text('🖥️ أكواد تطبيق الكمبيوتر (FAWORI-ADMIN)',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: kOrange)),
-            const SizedBox(height: 10),
-            ...adminFiles.map((f) => _tile(context, f, kAdminRepo)),
+        appBar: AppBar(
+          title: const Text('الأكواد'),
+          actions: [
+            IconButton(
+                icon: const Icon(Icons.refresh_rounded),
+                onPressed: () {
+                  setState(() => _loading = true);
+                  _loadLists();
+                }),
           ],
         ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: kOrange))
+            : ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  const Text('📱 أكواد تطبيق الجوال (FAWORI)',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w900, color: kTeal)),
+                  const SizedBox(height: 10),
+                  ...(_mobile ?? _fallbackMobile)
+                      .map((f) => _tile(context, f, kRepo)),
+                  const SizedBox(height: 24),
+                  const Text('🖥️ أكواد تطبيق الكمبيوتر (FAWORI-ADMIN)',
+                      style: TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w900, color: kOrange)),
+                  const SizedBox(height: 10),
+                  ...(_admin ?? _fallbackAdmin)
+                      .map((f) => _tile(context, f, kAdminRepo)),
+                ],
+              ),
       );
 
   Widget _tile(BuildContext context, String path, String repo) => Container(
@@ -1176,7 +1759,7 @@ class CodeFilesPage extends StatelessWidget {
               style: const TextStyle(fontSize: 13)),
           trailing: const Icon(Icons.edit_rounded, color: kTeal, size: 18),
           onTap: () => Navigator.push(context, MaterialPageRoute(
-              builder: (_) => CodeEditor(path: path, token: token, repo: repo))),
+              builder: (_) => CodeEditor(path: path, token: widget.token, repo: repo))),
         ),
       );
 }
