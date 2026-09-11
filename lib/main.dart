@@ -561,8 +561,12 @@ class InvoicesPage extends StatefulWidget {
 }
 
 class _InvoicesPageState extends State<InvoicesPage> {
+  /// المخزن الوحيد لملف الاكسل داخل الجلسة.
+  /// لا يُجلب تلقائياً أبداً — لا عند الفتح ولا عند إعادة الفتح.
+  /// يمتلئ ويستبدل فقط عبر زر تحديث 🔄
+  static ExcelData? _cached;
+
   bool _loading = true;
-  ExcelData? _xl; // مخزن ملف الاكسل داخل الجلسة
   bool _refreshing = false;
   final _invNo = TextEditingController();
   String _fetchedType = '';
@@ -600,7 +604,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   @override
   void initState() {
     super.initState();
-    _init(); // لا جلب تلقائي للاكسل — فقط عند الطلب
+    _init(); // تحميل بيانات المستخدمين/الفواتير فقط — بدون أي جلب لملف الاكسل
   }
 
   Future<void> _init() async {
@@ -608,78 +612,47 @@ class _InvoicesPageState extends State<InvoicesPage> {
     if (mounted) setState(() => _loading = false);
   }
 
-  /// جلب ملف الاكسل: مرة واحدة ويخزن، أو إجباري عند زر تحديث
-  Future<bool> _ensureExcel({bool force = false}) async {
-    if (_xl != null && !force) return true;
+  /// زر تحديث فقط: يجلب من المستودع ويستبدل المخزن مباشرة وسريعاً
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    setState(() => _refreshing = true);
     try {
       final r = await http
           .get(Uri.parse(
               '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}'))
-          .timeout(const Duration(seconds: 20));
-      if (r.statusCode != 200) return false;
-      _xl = parseFaworiExcel(r.bodyBytes);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<void> _refresh() async {
-    setState(() => _refreshing = true);
-    final ok = await _ensureExcel(force: true);
-    if (mounted) {
+          .timeout(const Duration(seconds: 30));
+      if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
+      final data = parseFaworiExcel(r.bodyBytes);
+      _cached = data; // استبدال المخزن بالكامل
+      if (!mounted) return;
       setState(() => _refreshing = false);
-      if (ok) {
-        _snack('تم التحديث من المستودع 100% ✅ ${_xl!.invoices.length} فاتورة و ${_xl!.materials.length} مادة فاوري');
-      } else {
-        _snack('تعذر الجلب — الملف غير موجود بالمستودع، ارفعه بزر رفع اكسل');
-      }
-    }
-  }
-
-  Future<void> _upload() async {
-    final res = await FilePicker.platform.pickFiles(
-        type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
-    if (res == null || res.files.isEmpty) return;
-    final bytes = res.files.first.bytes;
-    if (bytes == null) return;
-    setState(() => _refreshing = true);
-    try {
-      await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
-      _xl = parseFaworiExcel(bytes);
-      if (mounted) {
-        setState(() => _refreshing = false);
-        _snack('تم رفع الملف للمستودع وتحليله وحفظه ✅');
-      }
+      _snack('تم الجلب من المستودع واستبدال المخزن ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
     } catch (e) {
-      if (mounted) {
-        setState(() => _refreshing = false);
-        _snack('Error: $e');
-      }
+      if (!mounted) return;
+      setState(() => _refreshing = false);
+      _snack('فشل الجلب من المستودع: $e — المخزن السابق بدون تغيير');
     }
   }
 
-  Future<void> _fetch() async {
+  /// زر جلب: يقرأ من المخزن فقط — بدون أي اتصال
+  void _fetch() {
+    final data = _cached;
+    if (data == null) {
+      _snack('لا يوجد ملف مخزن — اضغط زر تحديث 🔄 لجلبه من المستودع');
+      return;
+    }
     final no = _invNo.text.trim();
     if (no.isEmpty) {
       _snack('اكتب رقم الفاتورة أولاً');
       return;
     }
-    setState(() => _refreshing = true);
-    final ok = await _ensureExcel(); // يجلب مرة واحدة ويخزن
-    if (!mounted) return;
-    setState(() => _refreshing = false);
-    if (!ok) {
-      _snack('الملف غير موجود — ارفعه بزر رفع اكسل ثم اضغط تحديث');
-      return;
-    }
-    final match = _xl!.invoices.where((i) => i.no.trim() == no).toList();
+    final match = data.invoices.where((i) => i.no.trim() == no).toList();
     if (match.isEmpty) {
-      _snack('لا توجد فاتورة بالرقم $no');
+      _snack('لا توجد فاتورة بالرقم $no داخل الملف المخزن');
       return;
     }
     final f = match.first;
-    final fawori = f.items.where((it) => _xl!.isFawori(it.code, it.name)).toList();
+    final fawori = f.items.where((it) => data.isFawori(it.code, it.name)).toList();
     setState(() {
       _fetchedType = f.type.isEmpty ? 'مبيع' : f.type;
       _items.clear();
@@ -694,7 +667,29 @@ class _InvoicesPageState extends State<InvoicesPage> {
       }
       if (_items.isEmpty) _items.add(_Draft());
     });
-    _snack('تم جلب ${fawori.length} مادة فاوري (${_isReturn ? 'مرتجع — تُخصم النقاط' : 'مبيع — تُضاف النقاط'})');
+    _snack('تم جلب ${fawori.length} مادة فاوري من المخزن ✅');
+  }
+
+  Future<void> _upload() async {
+    final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
+    if (res == null || res.files.isEmpty) return;
+    final bytes = res.files.first.bytes;
+    if (bytes == null) return;
+    setState(() => _refreshing = true);
+    try {
+      await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
+      _cached = parseFaworiExcel(bytes); // تحديث المخزن مباشرة من الملف المرفوع
+      if (mounted) {
+        setState(() => _refreshing = false);
+        _snack('تم رفع الملف للمستودع وتحليله وتخزينه ✅');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _refreshing = false);
+        _snack('Error: $e');
+      }
+    }
   }
 
   String _userName(String id) {
@@ -721,7 +716,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 icon: const Icon(Icons.upload_file_rounded),
                 onPressed: _refreshing ? null : _upload),
             IconButton(
-                tooltip: 'تحديث الملف من المستودع 100%',
+                tooltip: 'تحديث: جلب من المستودع واستبدال المخزن',
                 icon: _refreshing
                     ? const SizedBox(width: 20, height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
@@ -822,6 +817,33 @@ class _InvoicesPageState extends State<InvoicesPage> {
         decoration: BoxDecoration(
             color: Colors.white, borderRadius: BorderRadius.circular(18)),
         child: Column(children: [
+          // حالة المخزن — واضحة ومباشرة
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+                color: _cached == null ? Colors.red.withAlpha(20) : kTeal.withAlpha(20),
+                borderRadius: BorderRadius.circular(10)),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(
+                  _cached == null
+                      ? Icons.cloud_off_rounded
+                      : Icons.cloud_done_rounded,
+                  size: 16,
+                  color: _cached == null ? Colors.red : kTeal),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                    _cached == null
+                        ? 'لا يوجد ملف مخزن — اضغط زر تحديث 🔄 لجلبه من المستودع'
+                        : 'الملف المخزن جاهز: ${_cached!.invoices.length} فاتورة و ${_cached!.materials.length} مادة فاوري',
+                    style: TextStyle(
+                        color: _cached == null ? Colors.red : kTeal,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12)),
+              ),
+            ]),
+          ),
+          const SizedBox(height: 14),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(14),
@@ -876,11 +898,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                   backgroundColor: kTeal, foregroundColor: Colors.black),
-              onPressed: _refreshing ? null : _fetch,
-              icon: _refreshing
-                  ? const SizedBox(width: 18, height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                  : const Icon(Icons.download_rounded, size: 18),
+              onPressed: _fetch,
+              icon: const Icon(Icons.download_rounded, size: 18),
               label: const Text('جلب', style: TextStyle(fontWeight: FontWeight.w800)),
             ),
             if (_fetchedType.isNotEmpty) ...[
@@ -1139,7 +1158,6 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
           (double.tryParse(d.price.text) ?? 0) *
               (int.tryParse(d.qty.text) ?? 0));
 
-  // حساب مباشر ولحظي من الإجمالي
   int get _tRound => _total.round();
   int get _livePts => _tRound ~/ kPointUnit;
   int get _liveRem => _tRound % kPointUnit;
@@ -1186,13 +1204,11 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
       final int signed = _isReturn ? -pts : pts;
       final int signedStored = _isReturn ? -rem : rem;
       final old = widget.invoice;
-      // عكس تأثير الفاتورة القديمة من عميلها القديم
       final oldU = Store.users.where((x) => x.id == old.userId).toList();
       if (oldU.isNotEmpty) {
         oldU.first.points = _clamp(oldU.first.points - old.points);
         oldU.first.stored = _clamp(oldU.first.stored - old.stored);
       }
-      // تطبيق التأثير الجديد المحسوب مباشرة من الإجمالي
       u.points = _clamp(u.points + signed);
       u.stored = _clamp(u.stored + signedStored);
       final neu = Invoice(
