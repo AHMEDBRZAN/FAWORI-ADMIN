@@ -13,7 +13,7 @@ import 'extra.dart';
 const int _BIG = 1000000000;
 int _clamp(int v) => v.clamp(0, _BIG);
 
-/// مولّد باركود Code39 مدمج — بدون أي مكتبة خارجية — متوافق مع أجهزة الليزر
+/// مولّد باركود Code39 مدمج — بدون مكتبات خارجية — متوافق مع أجهزة الليزر
 class Code39Widget extends StatelessWidget {
   final String data;
   final double height;
@@ -31,7 +31,6 @@ class Code39Widget extends StatelessWidget {
     'S': 'nnwnnnwwn', 'T': 'nnnnwnwwn', 'U': 'wwnnnnnnw', 'V': 'nwwnnnnnw',
     'W': 'wwwnnnnnn', 'X': 'nwnnwnnnw', 'Y': 'wwnnwnnnn', 'Z': 'nwwnwnnnn',
     '-': 'nwnnnnwnw', '.': 'wwnnnnwnn', ' ': 'nwwnnnwnn', '*': 'nwnnwnwnn',
-    '\$': 'nwnwnwnnn', '/': 'nwnwnnnwn', '+': 'nwnnnwnwn', '%': 'nnnwnwnwn',
   };
 
   @override
@@ -578,6 +577,12 @@ class _Draft {
   final TextEditingController qty = TextEditingController(text: '1');
 }
 
+class _MatInfo {
+  final String name;
+  final double price;
+  _MatInfo(this.name, this.price);
+}
+
 /// حذف فاتورة مع عكس نقاطها ورصيدها من العميل ورفع الملفين
 Future<bool> deleteInvoiceReverse(
     BuildContext context, String token, Invoice inv) async {
@@ -730,14 +735,27 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// فهرس المواد: code -> مادة (اسم + سعر)
-  Map<String, XlItem> _matIndex() {
-    final m = <String, XlItem>{};
+  /// فهرس المواد: الرمز -> (اسم + سعر) من ورقة المواد + الفواتير
+  Map<String, _MatInfo> _matIndex() {
+    final m = <String, _MatInfo>{};
     final xl = _cached;
-    if (xl == null) return m;
-    for (final inv in xl.invoices) {
-      for (final it in inv.items) {
-        m.putIfAbsent(it.code, () => it);
+    if (xl != null) {
+      xl.materials.forEach((code, name) {
+        m[code] = _MatInfo(name, xl.prices[code] ?? 0);
+      });
+      for (final inv in xl.invoices) {
+        for (final it in inv.items) {
+          final cur = m[it.code];
+          if (cur == null) {
+            m[it.code] = _MatInfo(it.name, it.price);
+          } else {
+            if (cur.price == 0 && it.price > 0) {
+              m[it.code] = _MatInfo(cur.name.isEmpty ? it.name : cur.name, it.price);
+            } else if (cur.name.isEmpty) {
+              m[it.code] = _MatInfo(it.name, cur.price);
+            }
+          }
+        }
       }
     }
     return m;
@@ -746,36 +764,46 @@ class _InvoicesPageState extends State<InvoicesPage> {
   String _priceStr(double p) =>
       p == p.roundToDouble() ? p.toStringAsFixed(0) : p.toStringAsFixed(2);
 
-  void _addMat(String code, int qty) {
-    final it = _matIndex()[code];
+  void _addInfo(_MatInfo info, int qty) {
     final d = _Draft();
-    d.name.text = it?.name ?? 'مادة $code';
-    d.price.text = it == null ? '0' : _priceStr(it.price);
+    d.name.text = info.name;
+    d.price.text = _priceStr(info.price);
     d.qty.text = '$qty';
     _items.add(d);
   }
 
-  /// 📷 قراءة الليزر: أزواج (رمز-كمية) أو رقم فاتورة أو رمز مادة واحدة
+  /// 📷 قراءة الليزر: أزواج (رمز-كمية) أو باركود أو رقم فاتورة أو رمز مادة
   void _onScan(String raw) {
     final s = raw.trim().toUpperCase().replaceAll('*', '');
     if (s.isEmpty) return;
+    final xl = _cached;
     // 1) باركود مجمع: رموز وكميات مفصولة بشرطات 187627-2-20002-1
     if (s.contains('-')) {
       final parts = s.split('-');
       if (parts.length >= 2 && parts.length % 2 == 0) {
+        final idx = _matIndex();
+        int added = 0;
         setState(() {
           for (int i = 0; i + 1 < parts.length; i += 2) {
-            _addMat(parts[i].trim(), int.tryParse(parts[i + 1].trim()) ?? 1);
+            final code = parts[i].trim();
+            final qty = int.tryParse(parts[i + 1].trim()) ?? 1;
+            final info = idx[code];
+            if (info != null) {
+              _addInfo(info, qty);
+              added++;
+            }
           }
         });
-        _snack('تمت إضافة ${parts.length ~/ 2} مادة من الباركود دفعة واحدة ✅');
+        _snack('تمت إضافة $added مادة من الباركود دفعة واحدة ✅');
         return;
       }
     }
-    final xl = _cached;
+    // 2) باركود -> رمز المادة
+    String code = s;
+    if (xl != null && xl.barcodes.containsKey(s)) code = xl.barcodes[s]!;
+    // 3) رقم فاتورة => كل موادها دفعة واحدة
     if (xl != null) {
-      // 2) رقم فاتورة => كل موادها دفعة واحدة
-      final inv = xl.invoices.where((i) => i.no.trim() == s).toList();
+      final inv = xl.invoices.where((i) => i.no.trim() == code).toList();
       if (inv.isNotEmpty) {
         setState(() {
           for (final it in inv.first.items) {
@@ -786,23 +814,25 @@ class _InvoicesPageState extends State<InvoicesPage> {
             _items.add(d);
           }
         });
-        _snack('تمت إضافة ${inv.first.items.length} مادة من الفاتورة $s ✅');
+        _snack('تمت إضافة ${inv.first.items.length} مادة من الفاتورة $code ✅');
         return;
       }
-      // 3) رمز مادة واحدة
-      if (_matIndex().containsKey(s)) {
-        setState(() => _addMat(s, 1));
-        _snack('تمت إضافة المادة: ${_matIndex()[s]!.name} ✅');
-        return;
-      }
+    }
+    // 4) رمز مادة أو باركود محلول
+    final idx = _matIndex();
+    if (idx.containsKey(code)) {
+      setState(() => _addInfo(idx[code]!, 1));
+      _snack('تمت إضافة المادة: ${idx[code]!.name} ✅');
+      return;
     }
     _snack('باركود/رقم غير معروف: $s');
   }
 
-  /// 🏷️ توليد باركود واحد Code39 يحتوي كل مواد الفاتورة (رمز-كمية-رمز-كمية...)
+  /// 🏷️ توليد باركود Code39 واحد يحتوي كل مواد الفاتورة (رمز-كمية-...)
   void _showBarcode() {
+    final idx = _matIndex();
     final rev = <String, String>{};
-    _matIndex().forEach((code, it) => rev.putIfAbsent(it.name.trim(), () => code));
+    idx.forEach((code, info) => rev.putIfAbsent(info.name.trim(), () => code));
     final segs = <String>[];
     for (final d in _items) {
       final code = rev[d.name.text.trim()];
@@ -1090,7 +1120,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                     labelText: 'امسح الباركود بالليزر هنا ثم Enter...',
                     labelStyle: _hintDark,
                     hintStyle: _hintDark,
-                    prefixIcon: Icon(Icons.barcode_reader_rounded, color: kTeal),
+                    prefixIcon: Icon(Icons.qr_code_scanner_rounded, color: kTeal),
                     filled: true,
                     fillColor: Color(0xFFF4F6F8)),
               ),
