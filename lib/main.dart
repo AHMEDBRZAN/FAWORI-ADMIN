@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:barcode_widget/barcode_widget.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -13,6 +12,56 @@ import 'extra.dart';
 
 const int _BIG = 1000000000;
 int _clamp(int v) => v.clamp(0, _BIG);
+
+/// مولّد باركود Code39 مدمج — بدون أي مكتبة خارجية — متوافق مع أجهزة الليزر
+class Code39Widget extends StatelessWidget {
+  final String data;
+  final double height;
+  final double module;
+  const Code39Widget({super.key, required this.data, this.height = 90, this.module = 2});
+
+  static const Map<String, String> _T = {
+    '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
+    '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
+    '8': 'wnnwnnwnn', '9': 'nnwwnnwnn', 'A': 'wnnnnwnnw', 'B': 'nnwnnwnnw',
+    'C': 'wnwnnwnnn', 'D': 'nnnnwwnnw', 'E': 'wnnnwwnnn', 'F': 'nnwnwwnnn',
+    'G': 'nnnnnwwnw', 'H': 'wnnnnwwnn', 'I': 'nnwnnwwnn', 'J': 'nnnnwwwnn',
+    'K': 'wnnnnnnww', 'L': 'nnwnnnnww', 'M': 'wnwnnnnwn', 'N': 'nnnnwnnww',
+    'O': 'wnnnwnnwn', 'P': 'nnwnwnnwn', 'Q': 'nnnnnnwww', 'R': 'wnnnnnwwn',
+    'S': 'nnwnnnwwn', 'T': 'nnnnwnwwn', 'U': 'wwnnnnnnw', 'V': 'nwwnnnnnw',
+    'W': 'wwwnnnnnn', 'X': 'nwnnwnnnw', 'Y': 'wwnnwnnnn', 'Z': 'nwwnwnnnn',
+    '-': 'nwnnnnwnw', '.': 'wwnnnnwnn', ' ': 'nwwnnnwnn', '*': 'nwnnwnwnn',
+    '\$': 'nwnwnwnnn', '/': 'nwnwnnnwn', '+': 'nwnnnwnwn', '%': 'nnnwnwnwn',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final s = '*$data*'.toUpperCase();
+    final bars = <Widget>[];
+    for (int i = 0; i < s.length; i++) {
+      final p = _T[s[i]];
+      if (p == null) continue;
+      for (int e = 0; e < 9; e++) {
+        final wide = p[e] == 'w';
+        final isBar = e % 2 == 0;
+        bars.add(SizedBox(
+            width: module * (wide ? 3 : 1),
+            height: height,
+            child: ColoredBox(color: isBar ? Colors.black : Colors.white)));
+      }
+      bars.add(SizedBox(
+          width: module, height: height, child: const ColoredBox(color: Colors.white)));
+    }
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.all(10),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(mainAxisSize: MainAxisSize.min, children: bars),
+      ),
+    );
+  }
+}
 
 void main() => runApp(const AdminApp());
 
@@ -563,7 +612,7 @@ class InvoicesPage extends StatefulWidget {
 }
 
 class _InvoicesPageState extends State<InvoicesPage> {
-  /// المخزن المحلي لملف الاكسل — لا يُجلب تلقائياً من الإنترنت
+  /// المخزن المحلي لملف الاكسل — لا يُجلب تلقائياً من الإنترنت أبداً
   static ExcelData? _cached;
   static const String _b64Key = 'fawori_xlsx_b64_v1';
 
@@ -634,7 +683,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// 🔄 تحديث: جلب من المستودع + استبدال المخزن المحلي + حفظه
+  /// 🔄 تحديث: يجلب 100% من المستودع ويستبدل المخزن ويحفظه محلياً
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
@@ -681,7 +730,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// فهرس المواد: code -> مادة (اسم + سعر) من كل فواتير الاكسل
+  /// فهرس المواد: code -> مادة (اسم + سعر)
   Map<String, XlItem> _matIndex() {
     final m = <String, XlItem>{};
     final xl = _cached;
@@ -697,36 +746,35 @@ class _InvoicesPageState extends State<InvoicesPage> {
   String _priceStr(double p) =>
       p == p.roundToDouble() ? p.toStringAsFixed(0) : p.toStringAsFixed(2);
 
-  /// 📷 قراءة الباركود من جهاز الليزر (يكتب النص ثم Enter)
+  void _addMat(String code, int qty) {
+    final it = _matIndex()[code];
+    final d = _Draft();
+    d.name.text = it?.name ?? 'مادة $code';
+    d.price.text = it == null ? '0' : _priceStr(it.price);
+    d.qty.text = '$qty';
+    _items.add(d);
+  }
+
+  /// 📷 قراءة الليزر: أزواج (رمز-كمية) أو رقم فاتورة أو رمز مادة واحدة
   void _onScan(String raw) {
-    final s = raw.trim();
+    final s = raw.trim().toUpperCase().replaceAll('*', '');
     if (s.isEmpty) return;
-    // 1) باركود مجمع يحتوي كل المواد: FW|code*qty|code*qty|...
-    if (s.startsWith('FW|')) {
-      final parts = s.substring(3).split('|');
-      final idx = _matIndex();
-      int added = 0;
-      setState(() {
-        for (final p in parts) {
-          final seg = p.split('*');
-          final code = seg[0].trim();
-          if (code.isEmpty) continue;
-          final qty = seg.length > 1 ? (int.tryParse(seg[1]) ?? 1) : 1;
-          final it = idx[code];
-          final d = _Draft();
-          d.name.text = it?.name ?? 'مادة $code';
-          d.price.text = it == null ? '0' : _priceStr(it.price);
-          d.qty.text = '$qty';
-          _items.add(d);
-          added++;
-        }
-      });
-      _snack('تمت إضافة $added مادة من الباركود دفعة واحدة ✅');
-      return;
+    // 1) باركود مجمع: رموز وكميات مفصولة بشرطات 187627-2-20002-1
+    if (s.contains('-')) {
+      final parts = s.split('-');
+      if (parts.length >= 2 && parts.length % 2 == 0) {
+        setState(() {
+          for (int i = 0; i + 1 < parts.length; i += 2) {
+            _addMat(parts[i].trim(), int.tryParse(parts[i + 1].trim()) ?? 1);
+          }
+        });
+        _snack('تمت إضافة ${parts.length ~/ 2} مادة من الباركود دفعة واحدة ✅');
+        return;
+      }
     }
     final xl = _cached;
     if (xl != null) {
-      // 2) باركود/رقم فاتورة => إضافة كل موادها دفعة واحدة
+      // 2) رقم فاتورة => كل موادها دفعة واحدة
       final inv = xl.invoices.where((i) => i.no.trim() == s).toList();
       if (inv.isNotEmpty) {
         setState(() {
@@ -741,39 +789,31 @@ class _InvoicesPageState extends State<InvoicesPage> {
         _snack('تمت إضافة ${inv.first.items.length} مادة من الفاتورة $s ✅');
         return;
       }
-      // 3) باركود مادة واحدة
-      final it = _matIndex()[s];
-      if (it != null) {
-        setState(() {
-          final d = _Draft();
-          d.name.text = it.name;
-          d.price.text = _priceStr(it.price);
-          d.qty.text = '1';
-          _items.add(d);
-        });
-        _snack('تمت إضافة المادة: ${it.name} ✅');
+      // 3) رمز مادة واحدة
+      if (_matIndex().containsKey(s)) {
+        setState(() => _addMat(s, 1));
+        _snack('تمت إضافة المادة: ${_matIndex()[s]!.name} ✅');
         return;
       }
     }
     _snack('باركود/رقم غير معروف: $s');
   }
 
-  /// 🏷️ توليد باركود واحد يحتوي كل مواد الفاتورة الحالية
+  /// 🏷️ توليد باركود واحد Code39 يحتوي كل مواد الفاتورة (رمز-كمية-رمز-كمية...)
   void _showBarcode() {
-    final idx = _matIndex();
     final rev = <String, String>{};
-    idx.forEach((code, it) => rev.putIfAbsent(it.name.trim(), () => code));
+    _matIndex().forEach((code, it) => rev.putIfAbsent(it.name.trim(), () => code));
     final segs = <String>[];
     for (final d in _items) {
       final code = rev[d.name.text.trim()];
       if (code == null) continue;
-      segs.add('$code*${int.tryParse(d.qty.text) ?? 1}');
+      segs.add('$code-${int.tryParse(d.qty.text) ?? 1}');
     }
     if (segs.isEmpty) {
-      _snack('لا توجد مواد بأكواد معروفة لتوليد الباركود');
+      _snack('لا توجد مواد معروفة الرموز لتوليد الباركود');
       return;
     }
-    final data = 'FW|${segs.join('|')}';
+    final data = segs.join('-');
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -783,17 +823,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
         content: SizedBox(
           width: 420,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            BarcodeWidget(
-                barcode: Barcode.code128(),
-                data: data,
-                height: 110,
-                drawText: false),
+            Code39Widget(data: data, height: 90),
             const SizedBox(height: 10),
             SelectableText(data,
                 style: const TextStyle(fontSize: 11, color: kInk)),
             const SizedBox(height: 6),
             const Text(
-                'اطبعه والصقه على الفاتورة — مسحه بجهاز الليزر يضيف كل المواد دفعة واحدة',
+                'اطبعه والصقه — مسحه بالليزر يضيف كل المواد دفعة واحدة',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 11, color: Color(0xFF7A8699))),
           ]),
@@ -807,11 +843,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
     );
   }
 
-  /// جلب فاتورة بالرقم من المخزن فقط
+  /// جلب فاتورة بالرقم من المخزن فقط — بدون إنترنت
   void _fetch() {
     final data = _cached;
     if (data == null) {
-      _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📂 رفع');
+      _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📤 رفع');
       return;
     }
     final no = _invNo.text.trim();
@@ -1040,7 +1076,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
             ],
           ]),
           const SizedBox(height: 10),
-          //  حقل قراءة الباركود + زر توليد باركود الفاتورة
+          // حقل قراءة الليزر + زر باركود الفاتورة
           Row(children: [
             Expanded(
               child: TextField(
@@ -1249,7 +1285,9 @@ class _InvoicesPageState extends State<InvoicesPage> {
       await Future.delayed(const Duration(milliseconds: 900));
       await Store.saveInvoices(widget.token);
       if (!mounted) return;
-      _snack('تم الحفظ ونقل للجوال: الفاتورة رقم ${_invNo.text.trim()} | النقاط ${signed >= 0 ? '+' : ''}$signed | الرصيد المخزن $signedStored ✅');
+      _snack(_isReturn
+          ? 'تم حفظ المرتجع: خصم $pts نقطة ورصيد $rem ✅'
+          : 'تم الحفظ: +$pts نقطة، رصيد مخزن للفاتورة $rem ✅');
       setState(() {
         _items.clear();
         _items.add(_Draft());
@@ -1328,8 +1366,7 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
         child: Row(children: [
           Text(label, style: _inkBold),
           const Spacer(),
-          Text(value,
-              style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16)),
+          Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16)),
         ]),
       );
 
