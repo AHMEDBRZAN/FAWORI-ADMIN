@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:barcode_widget/barcode_widget.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -521,7 +522,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير =================
+// ================= الفواتير + الباركود =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
@@ -562,13 +563,14 @@ class InvoicesPage extends StatefulWidget {
 }
 
 class _InvoicesPageState extends State<InvoicesPage> {
-  /// المخزن المحلي لملف الاكسل (ذاكرة + حفظ دائم في المتصفح)
+  /// المخزن المحلي لملف الاكسل — لا يُجلب تلقائياً من الإنترنت
   static ExcelData? _cached;
   static const String _b64Key = 'fawori_xlsx_b64_v1';
 
   bool _loading = true;
   bool _refreshing = false;
   final _invNo = TextEditingController();
+  final _scan = TextEditingController();
   String _fetchedType = '';
   User? _selected;
   String _query = '';
@@ -609,36 +611,30 @@ class _InvoicesPageState extends State<InvoicesPage> {
 
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
-    // تحميل المخزن المحلي فقط — بدون أي جلب من الإنترنت
     if (_cached == null) await _loadLocalCache();
     if (mounted) setState(() => _loading = false);
   }
 
-  /// حفظ bytes الملف محلياً في المتصفح ليبقى بعد الإغلاق
   Future<void> _persistBytes(List<int> bytes) async {
     try {
       final p = await SharedPreferences.getInstance();
       await p.setString(_b64Key, base64Encode(bytes));
-    } catch (_) {
-      // إذا تجاوز حجم التخزين الحد يبقى في الذاكرة فقط
-    }
+    } catch (_) {}
   }
 
-  /// استرجاع الملف من التخزين المحلي بدون إنترنت
   Future<bool> _loadLocalCache() async {
     try {
       final p = await SharedPreferences.getInstance();
       final b64 = p.getString(_b64Key);
       if (b64 == null || b64.isEmpty) return false;
-      final bytes = base64Decode(b64);
-      _cached = parseFaworiExcel(bytes);
+      _cached = parseFaworiExcel(base64Decode(b64));
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  /// 🔄 تحديث: جلب من المستودع + استبدال المخزن المحلي + حفظه محلياً
+  /// 🔄 تحديث: جلب من المستودع + استبدال المخزن المحلي + حفظه
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
@@ -653,15 +649,15 @@ class _InvoicesPageState extends State<InvoicesPage> {
       await _persistBytes(r.bodyBytes);
       if (!mounted) return;
       setState(() => _refreshing = false);
-      _snack('تم الجلب من المستودع واستبدال المخزن المحلي ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
+      _snack('تم الجلب من المستودع واستبدال المخزن ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة');
     } catch (e) {
       if (!mounted) return;
       setState(() => _refreshing = false);
-      _snack('فشل الجلب من المستودع: $e — المخزن المحلي السابق بدون تغيير');
+      _snack('فشل الجلب من المستودع: $e — المخزن السابق بدون تغيير');
     }
   }
 
-  /// 📤 رفع ونشر: رفع الملف للمستودع + تخزينه محلياً
+  /// 📤 رفع ونشر للمستودع + تخزين محلي
   Future<void> _upload() async {
     final res = await FilePicker.platform.pickFiles(
         type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
@@ -671,8 +667,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     setState(() => _refreshing = true);
     try {
       await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
-      final data = parseFaworiExcel(bytes);
-      _cached = data;
+      _cached = parseFaworiExcel(bytes);
       await _persistBytes(bytes);
       if (mounted) {
         setState(() => _refreshing = false);
@@ -686,35 +681,137 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// 📂 قراءة محلية: قراءة ملف من الجهاز بدون نشر — الأسرع للعمل اليومي
-  Future<void> _loadLocalFile() async {
-    final res = await FilePicker.platform.pickFiles(
-        type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
-    if (res == null || res.files.isEmpty) return;
-    final bytes = res.files.first.bytes;
-    if (bytes == null) return;
-    setState(() => _refreshing = true);
-    try {
-      final data = parseFaworiExcel(bytes);
-      _cached = data;
-      await _persistBytes(bytes);
-      if (mounted) {
-        setState(() => _refreshing = false);
-        _snack('تم قراءة الملف محلياً بدون نشر ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _refreshing = false);
-        _snack('تعذرت قراءة الملف: $e');
+  /// فهرس المواد: code -> مادة (اسم + سعر) من كل فواتير الاكسل
+  Map<String, XlItem> _matIndex() {
+    final m = <String, XlItem>{};
+    final xl = _cached;
+    if (xl == null) return m;
+    for (final inv in xl.invoices) {
+      for (final it in inv.items) {
+        m.putIfAbsent(it.code, () => it);
       }
     }
+    return m;
   }
 
-  /// جلب فاتورة بالرقم من المخزن المحلي فقط — بدون إنترنت
+  String _priceStr(double p) =>
+      p == p.roundToDouble() ? p.toStringAsFixed(0) : p.toStringAsFixed(2);
+
+  /// 📷 قراءة الباركود من جهاز الليزر (يكتب النص ثم Enter)
+  void _onScan(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return;
+    // 1) باركود مجمع يحتوي كل المواد: FW|code*qty|code*qty|...
+    if (s.startsWith('FW|')) {
+      final parts = s.substring(3).split('|');
+      final idx = _matIndex();
+      int added = 0;
+      setState(() {
+        for (final p in parts) {
+          final seg = p.split('*');
+          final code = seg[0].trim();
+          if (code.isEmpty) continue;
+          final qty = seg.length > 1 ? (int.tryParse(seg[1]) ?? 1) : 1;
+          final it = idx[code];
+          final d = _Draft();
+          d.name.text = it?.name ?? 'مادة $code';
+          d.price.text = it == null ? '0' : _priceStr(it.price);
+          d.qty.text = '$qty';
+          _items.add(d);
+          added++;
+        }
+      });
+      _snack('تمت إضافة $added مادة من الباركود دفعة واحدة ✅');
+      return;
+    }
+    final xl = _cached;
+    if (xl != null) {
+      // 2) باركود/رقم فاتورة => إضافة كل موادها دفعة واحدة
+      final inv = xl.invoices.where((i) => i.no.trim() == s).toList();
+      if (inv.isNotEmpty) {
+        setState(() {
+          for (final it in inv.first.items) {
+            final d = _Draft();
+            d.name.text = it.name;
+            d.price.text = _priceStr(it.price);
+            d.qty.text = '${it.qty}';
+            _items.add(d);
+          }
+        });
+        _snack('تمت إضافة ${inv.first.items.length} مادة من الفاتورة $s ✅');
+        return;
+      }
+      // 3) باركود مادة واحدة
+      final it = _matIndex()[s];
+      if (it != null) {
+        setState(() {
+          final d = _Draft();
+          d.name.text = it.name;
+          d.price.text = _priceStr(it.price);
+          d.qty.text = '1';
+          _items.add(d);
+        });
+        _snack('تمت إضافة المادة: ${it.name} ✅');
+        return;
+      }
+    }
+    _snack('باركود/رقم غير معروف: $s');
+  }
+
+  /// 🏷️ توليد باركود واحد يحتوي كل مواد الفاتورة الحالية
+  void _showBarcode() {
+    final idx = _matIndex();
+    final rev = <String, String>{};
+    idx.forEach((code, it) => rev.putIfAbsent(it.name.trim(), () => code));
+    final segs = <String>[];
+    for (final d in _items) {
+      final code = rev[d.name.text.trim()];
+      if (code == null) continue;
+      segs.add('$code*${int.tryParse(d.qty.text) ?? 1}');
+    }
+    if (segs.isEmpty) {
+      _snack('لا توجد مواد بأكواد معروفة لتوليد الباركود');
+      return;
+    }
+    final data = 'FW|${segs.join('|')}';
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('باركود الفاتورة (يحتوي كل المواد)',
+            style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            BarcodeWidget(
+                barcode: Barcode.code128(),
+                data: data,
+                height: 110,
+                drawText: false),
+            const SizedBox(height: 10),
+            SelectableText(data,
+                style: const TextStyle(fontSize: 11, color: kInk)),
+            const SizedBox(height: 6),
+            const Text(
+                'اطبعه والصقه على الفاتورة — مسحه بجهاز الليزر يضيف كل المواد دفعة واحدة',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: Color(0xFF7A8699))),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('إغلاق')),
+        ],
+      ),
+    );
+  }
+
+  /// جلب فاتورة بالرقم من المخزن فقط
   void _fetch() {
     final data = _cached;
     if (data == null) {
-      _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📂 قراءة محلية');
+      _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📂 رفع');
       return;
     }
     final no = _invNo.text.trim();
@@ -735,15 +832,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
       for (final it in fawori) {
         final d = _Draft();
         d.name.text = it.name;
-        d.price.text = it.price == it.price.roundToDouble()
-            ? it.price.toStringAsFixed(0)
-            : it.price.toStringAsFixed(2);
+        d.price.text = _priceStr(it.price);
         d.qty.text = '${it.qty}';
         _items.add(d);
       }
       if (_items.isEmpty) _items.add(_Draft());
     });
-    _snack('تم جلب ${fawori.length} مادة فاوري من المخزن ✅');
+    _snack('تم جلب ${fawori.length} مادة فاوري (${_isReturn ? 'مرتجع — تُخصم النقاط' : 'مبيع — تُضاف النقاط'})');
   }
 
   String _userName(String id) {
@@ -766,7 +861,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           title: const Text('الفواتير والنقاط'),
           actions: [
             IconButton(
-                tooltip: 'تحديث: جلب من المستودع واستبدال المخزن المحلي',
+                tooltip: 'تحديث: جلب من المستودع واستبدال المخزن',
                 icon: _refreshing
                     ? const SizedBox(width: 20, height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
@@ -776,10 +871,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 tooltip: 'رفع ملف ونشره للمستودع + تخزين محلي',
                 icon: const Icon(Icons.upload_file_rounded),
                 onPressed: _refreshing ? null : _upload),
-            IconButton(
-                tooltip: 'قراءة ملف محلي بدون نشر (أسرع)',
-                icon: const Icon(Icons.folder_open_rounded, color: kOrange),
-                onPressed: _refreshing ? null : _loadLocalFile),
           ],
         ),
         body: _loading
@@ -787,33 +878,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
             : ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
-                  // حالة المخزن المحلي
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                        color: _cached == null ? Colors.red.withAlpha(20) : kTeal.withAlpha(20),
-                        borderRadius: BorderRadius.circular(10)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(
-                          _cached == null
-                              ? Icons.cloud_off_rounded
-                              : Icons.cloud_done_rounded,
-                          size: 16,
-                          color: _cached == null ? Colors.red : kTeal),
-                      const SizedBox(width: 6),
-                      Flexible(
-                        child: Text(
-                            _cached == null
-                                ? 'لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📂 قراءة محلية'
-                                : 'الملف المخزن محلياً جاهز: ${_cached!.invoices.length} فاتورة و ${_cached!.materials.length} مادة فاوري',
-                            style: TextStyle(
-                                color: _cached == null ? Colors.red : kTeal,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 12)),
-                      ),
-                    ]),
-                  ),
-                  const SizedBox(height: 14),
                   _invoiceCard(),
                   const SizedBox(height: 24),
                   Row(children: [
@@ -974,6 +1038,36 @@ class _InvoicesPageState extends State<InvoicesPage> {
                         fontWeight: FontWeight.w800, fontSize: 12)),
               ),
             ],
+          ]),
+          const SizedBox(height: 10),
+          //  حقل قراءة الباركود + زر توليد باركود الفاتورة
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _scan,
+                style: _inputDark,
+                onSubmitted: (v) {
+                  _onScan(v);
+                  _scan.clear();
+                },
+                decoration: const InputDecoration(
+                    labelText: 'امسح الباركود بالليزر هنا ثم Enter...',
+                    labelStyle: _hintDark,
+                    hintStyle: _hintDark,
+                    prefixIcon: Icon(Icons.barcode_reader_rounded, color: kTeal),
+                    filled: true,
+                    fillColor: Color(0xFFF4F6F8)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kOrange, foregroundColor: Colors.black),
+              onPressed: _showBarcode,
+              icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+              label: const Text('باركود الفاتورة',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+            ),
           ]),
           const SizedBox(height: 10),
           if (_selected == null) ...[
@@ -1160,6 +1254,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
         _items.clear();
         _items.add(_Draft());
         _invNo.clear();
+        _scan.clear();
         _fetchedType = '';
         _selected = null;
         _busy = false;
@@ -1173,7 +1268,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   }
 }
 
-// ================= محرر الفاتورة الشامل (حساب مباشر) =================
+// ================= محرر الفاتورة الشامل =================
 class InvoiceEditor extends StatefulWidget {
   final String token;
   final Invoice invoice;
