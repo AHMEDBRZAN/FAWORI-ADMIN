@@ -378,13 +378,34 @@ class _UserDialogState extends State<UserDialog> {
   late String _car = widget.user?.car ?? '';
   bool _busy = false;
 
+  /// القيمة تُحفظ بالرمز الإنجليزي (ليتوافق الجوال)، لكن النص الظاهر عربي دائماً
+  String _displayLabel(String o) {
+    switch (o) {
+      case 'customer':
+        return 'عميل';
+      case 'agent':
+        return 'وكيل';
+      case 'tech':
+        return 'صباغ';
+      case 'admin':
+        return 'مدير';
+      default:
+        return o;
+    }
+  }
+
   Widget _dd(String label, String value, List<String> opts, Function(String) set) =>
       DropdownButtonFormField<String>(
         value: value.isEmpty ? null : value,
         isExpanded: true,
         dropdownColor: kCard,
         decoration: InputDecoration(labelText: label, isDense: true),
-        items: opts.map((o) => DropdownMenuItem(value: o, child: Text(o))).toList(),
+        items: opts
+            .map((o) => DropdownMenuItem(
+                value: o,
+                child: Text(_displayLabel(o),
+                    style: const TextStyle(fontWeight: FontWeight.w700))))
+            .toList(),
         onChanged: (v) => setState(() => set(v ?? '')),
       );
 
