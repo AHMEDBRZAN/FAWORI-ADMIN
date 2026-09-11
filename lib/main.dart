@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data.dart';
 import 'excel_service.dart';
@@ -561,10 +562,9 @@ class InvoicesPage extends StatefulWidget {
 }
 
 class _InvoicesPageState extends State<InvoicesPage> {
-  /// المخزن الوحيد لملف الاكسل داخل الجلسة.
-  /// لا يُجلب تلقائياً أبداً — لا عند الفتح ولا عند إعادة الفتح.
-  /// يمتلئ ويستبدل فقط عبر زر تحديث 🔄
+  /// المخزن المحلي لملف الاكسل (ذاكرة + حفظ دائم في المتصفح)
   static ExcelData? _cached;
+  static const String _b64Key = 'fawori_xlsx_b64_v1';
 
   bool _loading = true;
   bool _refreshing = false;
@@ -604,15 +604,41 @@ class _InvoicesPageState extends State<InvoicesPage> {
   @override
   void initState() {
     super.initState();
-    _init(); // تحميل بيانات المستخدمين/الفواتير فقط — بدون أي جلب لملف الاكسل
+    _init();
   }
 
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
+    // تحميل المخزن المحلي فقط — بدون أي جلب من الإنترنت
+    if (_cached == null) await _loadLocalCache();
     if (mounted) setState(() => _loading = false);
   }
 
-  /// زر تحديث فقط: يجلب من المستودع ويستبدل المخزن مباشرة وسريعاً
+  /// حفظ bytes الملف محلياً في المتصفح ليبقى بعد الإغلاق
+  Future<void> _persistBytes(List<int> bytes) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_b64Key, base64Encode(bytes));
+    } catch (_) {
+      // إذا تجاوز حجم التخزين الحد يبقى في الذاكرة فقط
+    }
+  }
+
+  /// استرجاع الملف من التخزين المحلي بدون إنترنت
+  Future<bool> _loadLocalCache() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final b64 = p.getString(_b64Key);
+      if (b64 == null || b64.isEmpty) return false;
+      final bytes = base64Decode(b64);
+      _cached = parseFaworiExcel(bytes);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 🔄 تحديث: جلب من المستودع + استبدال المخزن المحلي + حفظه محلياً
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
@@ -623,22 +649,72 @@ class _InvoicesPageState extends State<InvoicesPage> {
           .timeout(const Duration(seconds: 30));
       if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
       final data = parseFaworiExcel(r.bodyBytes);
-      _cached = data; // استبدال المخزن بالكامل
+      _cached = data;
+      await _persistBytes(r.bodyBytes);
       if (!mounted) return;
       setState(() => _refreshing = false);
-      _snack('تم الجلب من المستودع واستبدال المخزن ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
+      _snack('تم الجلب من المستودع واستبدال المخزن المحلي ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
     } catch (e) {
       if (!mounted) return;
       setState(() => _refreshing = false);
-      _snack('فشل الجلب من المستودع: $e — المخزن السابق بدون تغيير');
+      _snack('فشل الجلب من المستودع: $e — المخزن المحلي السابق بدون تغيير');
     }
   }
 
-  /// زر جلب: يقرأ من المخزن فقط — بدون أي اتصال
+  /// 📤 رفع ونشر: رفع الملف للمستودع + تخزينه محلياً
+  Future<void> _upload() async {
+    final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
+    if (res == null || res.files.isEmpty) return;
+    final bytes = res.files.first.bytes;
+    if (bytes == null) return;
+    setState(() => _refreshing = true);
+    try {
+      await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
+      final data = parseFaworiExcel(bytes);
+      _cached = data;
+      await _persistBytes(bytes);
+      if (mounted) {
+        setState(() => _refreshing = false);
+        _snack('تم رفع الملف للمستودع ونشره + تخزينه محلياً ✅');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _refreshing = false);
+        _snack('Error: $e');
+      }
+    }
+  }
+
+  /// 📂 قراءة محلية: قراءة ملف من الجهاز بدون نشر — الأسرع للعمل اليومي
+  Future<void> _loadLocalFile() async {
+    final res = await FilePicker.platform.pickFiles(
+        type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
+    if (res == null || res.files.isEmpty) return;
+    final bytes = res.files.first.bytes;
+    if (bytes == null) return;
+    setState(() => _refreshing = true);
+    try {
+      final data = parseFaworiExcel(bytes);
+      _cached = data;
+      await _persistBytes(bytes);
+      if (mounted) {
+        setState(() => _refreshing = false);
+        _snack('تم قراءة الملف محلياً بدون نشر ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة فاوري');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _refreshing = false);
+        _snack('تعذرت قراءة الملف: $e');
+      }
+    }
+  }
+
+  /// جلب فاتورة بالرقم من المخزن المحلي فقط — بدون إنترنت
   void _fetch() {
     final data = _cached;
     if (data == null) {
-      _snack('لا يوجد ملف مخزن — اضغط زر تحديث 🔄 لجلبه من المستودع');
+      _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📂 قراءة محلية');
       return;
     }
     final no = _invNo.text.trim();
@@ -670,28 +746,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _snack('تم جلب ${fawori.length} مادة فاوري من المخزن ✅');
   }
 
-  Future<void> _upload() async {
-    final res = await FilePicker.platform.pickFiles(
-        type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
-    if (res == null || res.files.isEmpty) return;
-    final bytes = res.files.first.bytes;
-    if (bytes == null) return;
-    setState(() => _refreshing = true);
-    try {
-      await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
-      _cached = parseFaworiExcel(bytes); // تحديث المخزن مباشرة من الملف المرفوع
-      if (mounted) {
-        setState(() => _refreshing = false);
-        _snack('تم رفع الملف للمستودع وتحليله وتخزينه ✅');
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _refreshing = false);
-        _snack('Error: $e');
-      }
-    }
-  }
-
   String _userName(String id) {
     final m = _users.where((u) => u.id == id);
     return m.isEmpty ? '—' : m.first.name;
@@ -712,16 +766,20 @@ class _InvoicesPageState extends State<InvoicesPage> {
           title: const Text('الفواتير والنقاط'),
           actions: [
             IconButton(
-                tooltip: 'رفع ملف اكسل جديد',
-                icon: const Icon(Icons.upload_file_rounded),
-                onPressed: _refreshing ? null : _upload),
-            IconButton(
-                tooltip: 'تحديث: جلب من المستودع واستبدال المخزن',
+                tooltip: 'تحديث: جلب من المستودع واستبدال المخزن المحلي',
                 icon: _refreshing
                     ? const SizedBox(width: 20, height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
                     : const Icon(Icons.sync_rounded, color: kTeal),
                 onPressed: _refreshing ? null : _refresh),
+            IconButton(
+                tooltip: 'رفع ملف ونشره للمستودع + تخزين محلي',
+                icon: const Icon(Icons.upload_file_rounded),
+                onPressed: _refreshing ? null : _upload),
+            IconButton(
+                tooltip: 'قراءة ملف محلي بدون نشر (أسرع)',
+                icon: const Icon(Icons.folder_open_rounded, color: kOrange),
+                onPressed: _refreshing ? null : _loadLocalFile),
           ],
         ),
         body: _loading
@@ -729,6 +787,33 @@ class _InvoicesPageState extends State<InvoicesPage> {
             : ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
+                  // حالة المخزن المحلي
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                        color: _cached == null ? Colors.red.withAlpha(20) : kTeal.withAlpha(20),
+                        borderRadius: BorderRadius.circular(10)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(
+                          _cached == null
+                              ? Icons.cloud_off_rounded
+                              : Icons.cloud_done_rounded,
+                          size: 16,
+                          color: _cached == null ? Colors.red : kTeal),
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                            _cached == null
+                                ? 'لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📂 قراءة محلية'
+                                : 'الملف المخزن محلياً جاهز: ${_cached!.invoices.length} فاتورة و ${_cached!.materials.length} مادة فاوري',
+                            style: TextStyle(
+                                color: _cached == null ? Colors.red : kTeal,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 12)),
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(height: 14),
                   _invoiceCard(),
                   const SizedBox(height: 24),
                   Row(children: [
@@ -817,33 +902,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
         decoration: BoxDecoration(
             color: Colors.white, borderRadius: BorderRadius.circular(18)),
         child: Column(children: [
-          // حالة المخزن — واضحة ومباشرة
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-                color: _cached == null ? Colors.red.withAlpha(20) : kTeal.withAlpha(20),
-                borderRadius: BorderRadius.circular(10)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Icon(
-                  _cached == null
-                      ? Icons.cloud_off_rounded
-                      : Icons.cloud_done_rounded,
-                  size: 16,
-                  color: _cached == null ? Colors.red : kTeal),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                    _cached == null
-                        ? 'لا يوجد ملف مخزن — اضغط زر تحديث 🔄 لجلبه من المستودع'
-                        : 'الملف المخزن جاهز: ${_cached!.invoices.length} فاتورة و ${_cached!.materials.length} مادة فاوري',
-                    style: TextStyle(
-                        color: _cached == null ? Colors.red : kTeal,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 12)),
-              ),
-            ]),
-          ),
-          const SizedBox(height: 14),
           Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(14),
