@@ -1,5 +1,5 @@
 name: fawori_admin
-description: FAWORI Admin
+description: لوحة تحكم شركة فاوري
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -11,6 +11,7 @@ dependencies:
     sdk: flutter
   http: ^1.2.0
   shared_preferences: ^2.2.0
+  image_picker: ^1.1.2
   file_picker: ^8.1.4
   excel: ^4.0.6
 
