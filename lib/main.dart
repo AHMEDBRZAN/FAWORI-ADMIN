@@ -570,7 +570,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير + تحميل سلس متعدد المصادر =================
+// ================= الفواتير + الباركود =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
@@ -665,10 +665,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
 
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
+    await _loadLocalCache();
     if (mounted) setState(() => _loading = false);
-    final hasCache = await _loadLocalCache();
-    if (mounted) setState(() {});
-    await _loadExcel(silent: hasCache);
   }
 
   Future<bool> _loadLocalCache() async {
@@ -691,17 +689,14 @@ class _InvoicesPageState extends State<InvoicesPage> {
     } catch (_) {}
   }
 
-  /// تحميل سلس متعدد المصادر مثل التطبيق المرجعي:
-  /// Pages (بكاسر كاش) ← raw مباشر ← بروكسي ← إعادة محاولة
-  Future<void> _loadExcel({bool silent = false}) async {
+  /// 🔄 تحديث فقط: يجلب من المستودع ويستبدل المخزن المحلي ويحفظه
+  Future<void> _refresh() async {
     if (_xlLoading) return;
-    if (mounted) {
-      setState(() {
-        _xlLoading = true;
-        _xlError = null;
-        _xlStatus = 'جاري الاتصال بالمستودع…';
-      });
-    }
+    setState(() {
+      _xlLoading = true;
+      _xlError = null;
+      _xlStatus = 'جاري الاتصال بالمستودع…';
+    });
     final rawUrl =
         'https://raw.githubusercontent.com/$kOwner/$kRepo/main/assets/data/fawori.xlsx';
     final urls = <String>[
@@ -711,7 +706,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     ];
     List<int>? bytes;
     for (int i = 0; i < urls.length; i++) {
-      if (mounted && !silent) {
+      if (mounted) {
         setState(() => _xlStatus =
             i == 0 ? 'جاري الاتصال بالمستودع…' : 'محاولة بديلة ${i + 1} من 3…');
       }
@@ -736,9 +731,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
             _xlStatus = '';
             _xlError = null;
           });
-          _snack(silent
-              ? 'تم تحديث الملف من المستودع بالخلفية ✅ ${data.invoices.length} فاتورة'
-              : 'تم تحميل الملف ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة');
+          _snack('تم تحديث الملف من المستودع ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة');
         }
       } catch (e) {
         if (mounted) {
@@ -876,7 +869,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   void _fetch() {
     final data = _cached;
     if (data == null) {
-      _snack('لا يوجد ملف محمل — انتظر التحميل أو اضغط 🔄 تحديث');
+      _snack('لا يوجد ملف محفوظ محلياً — اضغط 🔄 تحديث لجلبه من المستودع');
       return;
     }
     final no = _invNo.text.trim();
@@ -886,7 +879,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
     final match = data.invoices.where((i) => i.no.trim() == no).toList();
     if (match.isEmpty) {
-      _snack('لا توجد فاتورة بالرقم $no داخل الملف المحمل');
+      _snack('لا توجد فاتورة بالرقم $no داخل الملف المحفوظ');
       return;
     }
     final f = match.first;
@@ -931,22 +924,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
       );
 
   Widget _cacheBanner() {
-    if (_xlLoading && _cached == null) {
-      return Container(
-        padding: const EdgeInsets.all(22),
-        decoration: BoxDecoration(
-            color: Colors.white, borderRadius: BorderRadius.circular(14)),
-        child: Column(children: [
-          const SizedBox(
-              width: 34, height: 34,
-              child: CircularProgressIndicator(strokeWidth: 3, color: kTeal)),
-          const SizedBox(height: 12),
-          Text(_xlStatus.isEmpty ? 'جاري تحميل ملف الاكسل…' : _xlStatus,
-              style: const TextStyle(
-                  color: kInk, fontWeight: FontWeight.w700, fontSize: 13)),
-        ]),
-      );
-    }
     final xl = _cached;
     if (xl == null) {
       return Container(
@@ -960,7 +937,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
             const Icon(Icons.cloud_off_rounded, color: Colors.red, size: 20),
             const SizedBox(width: 8),
             Expanded(
-                child: Text(_xlError ?? 'لا يوجد ملف — ارفعه أو أعد المحاولة',
+                child: Text(_xlError ?? 'لا يوجد ملف محفوظ محلياً — اضغط 🔄 تحديث لجلبه من المستودع',
                     style: const TextStyle(
                         color: Colors.red,
                         fontWeight: FontWeight.w700,
@@ -972,9 +949,9 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
                         backgroundColor: kTeal, foregroundColor: Colors.black),
-                    onPressed: _xlLoading ? null : () => _loadExcel(),
+                    onPressed: _xlLoading ? null : _refresh,
                     icon: const Icon(Icons.sync_rounded, size: 18),
-                    label: const Text('إعادة المحاولة'))),
+                    label: const Text('تحديث'))),
             const SizedBox(width: 8),
             Expanded(
                 child: ElevatedButton.icon(
@@ -1004,8 +981,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
           Expanded(
               child: Text(
                   _xlLoading
-                      ? 'جاري تحديث الملف من المستودع بالخلفية…'
-                      : 'الملف محمل وجاهز — آخر تحديث من المستودع',
+                      ? 'جاري تحديث الملف من المستودع…'
+                      : 'الملف المحفوظ محلياً جاهز',
                   style: const TextStyle(
                       color: Colors.green,
                       fontWeight: FontWeight.w800,
@@ -1057,7 +1034,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                     ? const SizedBox(width: 20, height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
                     : const Icon(Icons.sync_rounded, color: kTeal),
-                onPressed: _xlLoading ? null : () => _loadExcel()),
+                onPressed: _xlLoading ? null : _refresh),
           ],
         ),
         body: _loading
