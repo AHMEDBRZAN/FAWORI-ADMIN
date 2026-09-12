@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:js' as js;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -13,7 +14,7 @@ import 'extra.dart';
 const int _BIG = 1000000000;
 int _clamp(int v) => v.clamp(0, _BIG);
 
-/// مولّد باركود Code39 مدمج — بدون مكتبات خارجية — متوافق مع أجهزة الليزر
+/// مولّد باركود Code39 مدمج — بدون مكتبات خارجية
 class Code39Widget extends StatelessWidget {
   final String data;
   final double height;
@@ -570,7 +571,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير + الباركود =================
+// ================= الفواتير + الباركود (بدون أي جلب تلقائي) =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
@@ -583,7 +584,6 @@ class _MatInfo {
   _MatInfo(this.name, this.price);
 }
 
-/// حذف فاتورة مع عكس نقاطها ورصيدها من العميل ورفع الملفين
 Future<bool> deleteInvoiceReverse(
     BuildContext context, String token, Invoice inv) async {
   if (!await confirmDialog(context, 'حذف الفاتورة وعكس نقاطها ورصيدها من العميل؟')) {
@@ -617,7 +617,6 @@ class InvoicesPage extends StatefulWidget {
 }
 
 class _InvoicesPageState extends State<InvoicesPage> {
-  /// المخزن المحلي لملف الاكسل — لا يُجلب تلقائياً من الإنترنت أبداً
   static ExcelData? _cached;
   static const String _b64Key = 'fawori_xlsx_b64_v1';
 
@@ -660,12 +659,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
   @override
   void initState() {
     super.initState();
-    _init();
+    _init(); // يحمّل المستخدمين/الفواتير فقط — لا يلمس ملف الاكسل إطلاقاً
   }
 
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
-    if (_cached == null) await _loadLocalCache();
     if (mounted) setState(() => _loading = false);
   }
 
@@ -688,7 +686,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// 🔄 تحديث: يجلب 100% من المستودع ويستبدل المخزن ويحفظه محلياً
+  /// 🔄 تحديث فقط: يجلب 100% من المستودع ويستبدل المخزن ويحفظه محلياً
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
@@ -735,7 +733,22 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// فهرس المواد: الرمز -> (اسم + سعر) من ورقة المواد + الفواتير
+  /// 📷 مسح بالكاميرا (هاتف أو أي جهاز بكاميرا) عبر المتصفح
+  void _cameraScan() {
+    final messenger = ScaffoldMessenger.of(context);
+    js.context.callMethod('startBarcodeScanner', [
+      js.allowInterop((String text) {
+        js.context.callMethod('stopBarcodeScanner', []);
+        if (text.startsWith('ERROR:')) {
+          messenger.showSnackBar(SnackBar(
+              content: Text('تعذر تشغيل الكاميرا: ${text.substring(6)}')));
+          return;
+        }
+        _onScan(text);
+      }),
+    ]);
+  }
+
   Map<String, _MatInfo> _matIndex() {
     final m = <String, _MatInfo>{};
     final xl = _cached;
@@ -772,12 +785,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _items.add(d);
   }
 
-  /// 📷 قراءة الليزر: أزواج (رمز-كمية) أو باركود أو رقم فاتورة أو رمز مادة
+  /// قراءة الليزر/الكاميرا: أزواج (رمز-كمية) أو باركود أو رقم فاتورة
   void _onScan(String raw) {
     final s = raw.trim().toUpperCase().replaceAll('*', '');
     if (s.isEmpty) return;
     final xl = _cached;
-    // 1) باركود مجمع: رموز وكميات مفصولة بشرطات 187627-2-20002-1
     if (s.contains('-')) {
       final parts = s.split('-');
       if (parts.length >= 2 && parts.length % 2 == 0) {
@@ -798,10 +810,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
         return;
       }
     }
-    // 2) باركود -> رمز المادة
     String code = s;
     if (xl != null && xl.barcodes.containsKey(s)) code = xl.barcodes[s]!;
-    // 3) رقم فاتورة => كل موادها دفعة واحدة
     if (xl != null) {
       final inv = xl.invoices.where((i) => i.no.trim() == code).toList();
       if (inv.isNotEmpty) {
@@ -818,7 +828,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
         return;
       }
     }
-    // 4) رمز مادة أو باركود محلول
     final idx = _matIndex();
     if (idx.containsKey(code)) {
       setState(() => _addInfo(idx[code]!, 1));
@@ -828,7 +837,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _snack('باركود/رقم غير معروف: $s');
   }
 
-  /// 🏷️ توليد باركود Code39 واحد يحتوي كل مواد الفاتورة (رمز-كمية-...)
   void _showBarcode() {
     final idx = _matIndex();
     final rev = <String, String>{};
@@ -859,7 +867,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
                 style: const TextStyle(fontSize: 11, color: kInk)),
             const SizedBox(height: 6),
             const Text(
-                'اطبعه والصقه — مسحه بالليزر يضيف كل المواد دفعة واحدة',
+                'اطبعه والصقه — مسحه بالكاميرا أو الليزر يضيف كل المواد دفعة واحدة',
                 textAlign: TextAlign.center,
                 style: TextStyle(fontSize: 11, color: Color(0xFF7A8699))),
           ]),
@@ -873,13 +881,16 @@ class _InvoicesPageState extends State<InvoicesPage> {
     );
   }
 
-  /// جلب فاتورة بالرقم من المخزن فقط — بدون إنترنت
-  void _fetch() {
-    final data = _cached;
-    if (data == null) {
-      _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث أو 📤 رفع');
-      return;
+  /// جلب فاتورة بالرقم: يستخدم المخزن فقط — وإن لا يوجد مخزن يجرّب المحلي بصمت ثم يطلب تحديث
+  Future<void> _fetch() async {
+    if (_cached == null) {
+      final ok = await _loadLocalCache();
+      if (!ok) {
+        _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث لجلبه من المستودع');
+        return;
+      }
     }
+    final data = _cached!;
     final no = _invNo.text.trim();
     if (no.isEmpty) {
       _snack('اكتب رقم الفاتورة أولاً');
@@ -1106,7 +1117,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
             ],
           ]),
           const SizedBox(height: 10),
-          // حقل قراءة الليزر + زر باركود الفاتورة
           Row(children: [
             Expanded(
               child: TextField(
@@ -1117,14 +1127,19 @@ class _InvoicesPageState extends State<InvoicesPage> {
                   _scan.clear();
                 },
                 decoration: const InputDecoration(
-                    labelText: 'امسح الباركود بالليزر هنا ثم Enter...',
+                    labelText: 'امسح هنا ثم Enter (ليزر)...',
                     labelStyle: _hintDark,
                     hintStyle: _hintDark,
-                    prefixIcon: Icon(Icons.qr_code_scanner_rounded, color: kTeal),
+                    prefixIcon: Icon(Icons.barcode_reader_rounded, color: kTeal),
                     filled: true,
                     fillColor: Color(0xFFF4F6F8)),
               ),
             ),
+            const SizedBox(width: 8),
+            IconButton(
+                tooltip: 'مسح بكاميرا الهاتف',
+                icon: const Icon(Icons.photo_camera_rounded, color: kTeal, size: 28),
+                onPressed: _cameraScan),
             const SizedBox(width: 8),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
