@@ -570,7 +570,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير + الباركود =================
+// ================= الفواتير + تحميل سلس متعدد المصادر =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
@@ -620,11 +620,12 @@ class _InvoicesPageState extends State<InvoicesPage> {
   static const String _b64Key = 'fawori_xlsx_b64_v1';
 
   bool _loading = true;
-  bool _refreshing = false;
+  bool _xlLoading = false;
+  String _xlStatus = '';
+  String? _xlError;
   final _invNo = TextEditingController();
   final _scan = TextEditingController();
   String _fetchedType = '';
-  String _lastDate = '';
   User? _selected;
   String _query = '';
   final List<_Draft> _items = [_Draft()];
@@ -662,25 +663,27 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _init();
   }
 
-  /// عند فتح الصفحة: لا شبكة إطلاقاً.
-  /// نحمّل الملف المحلي المحفوظ مرة واحدة فقط إن لم يكن محمّلاً بعد.
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
-    if (_cached == null) await _loadLocalCache();
     if (mounted) setState(() => _loading = false);
+    // 1) كاش محلي ⇒ الصفحة تفتح فوراً
+    final hasCache = await _loadLocalCache();
+    if (mounted) setState(() {});
+    // 2) جلب من المستودع: بالخلفية إن يوجد كاش، وإلا بشاشة تحميل
+    await _loadExcel(silent: hasCache);
   }
 
-  void _computeLastDate() {
-    final xl = _cached;
-    if (xl == null || xl.invoices.isEmpty) {
-      _lastDate = '';
-      return;
+  Future<bool> _loadLocalCache() async {
+    if (_cached != null) return true;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final b64 = p.getString(_b64Key);
+      if (b64 == null || b64.isEmpty) return false;
+      _cached = parseFaworiExcel(base64Decode(b64));
+      return true;
+    } catch (_) {
+      return false;
     }
-    var max = '';
-    for (final i in xl.invoices) {
-      if (i.date.compareTo(max) > 0) max = i.date;
-    }
-    _lastDate = max;
   }
 
   Future<void> _persistBytes(List<int> bytes) async {
@@ -690,64 +693,96 @@ class _InvoicesPageState extends State<InvoicesPage> {
     } catch (_) {}
   }
 
-  /// يقرأ من التخزين المحلي فقط — إن كان محمّلاً مسبقاً لا يعيد التحليل
-  Future<bool> _loadLocalCache() async {
-    if (_cached != null) return true;
-    try {
-      final p = await SharedPreferences.getInstance();
-      final b64 = p.getString(_b64Key);
-      if (b64 == null || b64.isEmpty) return false;
-      _cached = parseFaworiExcel(base64Decode(b64));
-      _computeLastDate();
-      return true;
-    } catch (_) {
-      return false;
+  /// تحميل سلس متعدد المصادر مثل التطبيق المرجعي:
+  /// Pages (بكاسر كاش) ← raw مباشر ← بروكسي ← إعادة محاولة
+  Future<void> _loadExcel({bool silent = false}) async {
+    if (_xlLoading) return;
+    if (mounted) {
+      setState(() {
+        _xlLoading = true;
+        _xlError = null;
+        _xlStatus = 'جاري الاتصال بالمستودع…';
+      });
+    }
+    final rawUrl =
+        'https://raw.githubusercontent.com/$kOwner/$kRepo/main/assets/data/fawori.xlsx';
+    final urls = <String>[
+      '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}',
+      rawUrl,
+      'https://api.allorigins.win/raw?url=${Uri.encodeComponent(rawUrl)}',
+    ];
+    List<int>? bytes;
+    for (int i = 0; i < urls.length; i++) {
+      if (mounted && !silent) {
+        setState(() => _xlStatus =
+            i == 0 ? 'جاري الاتصال بالمستودع…' : 'محاولة بديلة ${i + 1} من 3…');
+      }
+      try {
+        final r = await http
+            .get(Uri.parse(urls[i]))
+            .timeout(const Duration(seconds: 25));
+        if (r.statusCode == 200 && r.bodyBytes.isNotEmpty) {
+          bytes = r.bodyBytes;
+          break;
+        }
+      } catch (_) {}
+    }
+    if (bytes != null) {
+      try {
+        final data = parseFaworiExcel(bytes);
+        _cached = data;
+        await _persistBytes(bytes);
+        if (mounted) {
+          setState(() {
+            _xlLoading = false;
+            _xlStatus = '';
+            _xlError = null;
+          });
+          _snack(silent
+              ? 'تم تحديث الملف من المستودع بالخلفية ✅ ${data.invoices.length} فاتورة'
+              : 'تم تحميل الملف ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة');
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _xlLoading = false;
+            _xlError = 'خطأ في تحليل الملف: $e';
+          });
+        }
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _xlLoading = false;
+          _xlError = _cached != null
+              ? 'تعذر التحديث من المستودع — يتم استخدام النسخة المحفوظة محلياً'
+              : 'تعذر تحميل الملف من المستودع — ارفعه يدوياً أو أعد المحاولة';
+        });
+      }
     }
   }
 
-  /// 🔄 تحديث فقط: يجلب من المستودع ويستبدل المخزن المحلي ويحفظه
-  Future<void> _refresh() async {
-    if (_refreshing) return;
-    setState(() => _refreshing = true);
-    try {
-      final r = await http
-          .get(Uri.parse(
-              '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}'))
-          .timeout(const Duration(seconds: 30));
-      if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
-      _cached = parseFaworiExcel(r.bodyBytes);
-      _computeLastDate();
-      await _persistBytes(r.bodyBytes);
-      if (!mounted) return;
-      setState(() => _refreshing = false);
-      _snack('تم الجلب من المستودع واستبدال المخزن ✅ ${_cached!.invoices.length} فاتورة و ${_cached!.materials.length} مادة');
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _refreshing = false);
-      _snack('فشل الجلب من المستودع: $e — المخزن السابق بدون تغيير');
-    }
-  }
-
-  /// 📤 رفع ونشر للمستودع + تخزين محلي
   Future<void> _upload() async {
     final res = await FilePicker.platform.pickFiles(
         type: FileType.custom, allowedExtensions: ['xlsx'], withData: true);
     if (res == null || res.files.isEmpty) return;
     final bytes = res.files.first.bytes;
     if (bytes == null) return;
-    setState(() => _refreshing = true);
+    setState(() => _xlLoading = true);
     try {
       await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
       _cached = parseFaworiExcel(bytes);
-      _computeLastDate();
       await _persistBytes(bytes);
       if (mounted) {
-        setState(() => _refreshing = false);
+        setState(() {
+          _xlLoading = false;
+          _xlError = null;
+        });
         _snack('تم رفع الملف للمستودع ونشره + تخزينه محلياً ✅');
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _refreshing = false);
+        setState(() => _xlLoading = false);
         _snack('Error: $e');
       }
     }
@@ -843,7 +878,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   void _fetch() {
     final data = _cached;
     if (data == null) {
-      _snack('لا يوجد ملف محفوظ محلياً — اضغط 🔄 تحديث لجلبه من المستودع');
+      _snack('لا يوجد ملف محمل — انتظر التحميل أو اضغط 🔄 تحديث');
       return;
     }
     final no = _invNo.text.trim();
@@ -853,7 +888,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
     final match = data.invoices.where((i) => i.no.trim() == no).toList();
     if (match.isEmpty) {
-      _snack('لا توجد فاتورة بالرقم $no داخل الملف المحفوظ');
+      _snack('لا توجد فاتورة بالرقم $no داخل الملف المحمل');
       return;
     }
     final f = match.first;
@@ -873,53 +908,19 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _snack('تم جلب ${fawori.length} مادة فاوري (${_isReturn ? 'مرتجع — تُخصم النقاط' : 'مبيع — تُضاف النقاط'})');
   }
 
-  void _showBarcode() {
-    final idx = _matIndex();
-    final rev = <String, String>{};
-    idx.forEach((code, info) => rev.putIfAbsent(info.name.trim(), () => code));
-    final segs = <String>[];
-    for (final d in _items) {
-      final code = rev[d.name.text.trim()];
-      if (code == null) continue;
-      segs.add('$code-${int.tryParse(d.qty.text) ?? 1}');
-    }
-    if (segs.isEmpty) {
-      _snack('لا توجد مواد معروفة الرموز لتوليد الباركود');
-      return;
-    }
-    final data = segs.join('-');
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: const Text('باركود الفاتورة (يحتوي كل المواد)',
-            style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
-        content: SizedBox(
-          width: 420,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Code39Widget(data: data, height: 90),
-            const SizedBox(height: 10),
-            SelectableText(data,
-                style: const TextStyle(fontSize: 11, color: kInk)),
-            const SizedBox(height: 6),
-            const Text(
-                'اطبعه والصقه — مسحه بالليزر يضيف كل المواد دفعة واحدة',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 11, color: Color(0xFF7A8699))),
-          ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إغلاق')),
-        ],
-      ),
-    );
-  }
-
   String _userName(String id) {
     final m = _users.where((u) => u.id == id);
     return m.isEmpty ? '—' : m.first.name;
+  }
+
+  String _lastDate() {
+    final xl = _cached;
+    if (xl == null || xl.invoices.isEmpty) return '—';
+    var max = '';
+    for (final i in xl.invoices) {
+      if (i.date.compareTo(max) > 0) max = i.date;
+    }
+    return max.isEmpty ? '—' : max;
   }
 
   Widget _sumRow(String label, String value, Color color) => Padding(
@@ -930,6 +931,104 @@ class _InvoicesPageState extends State<InvoicesPage> {
           Text(value, style: TextStyle(color: color, fontWeight: FontWeight.w900, fontSize: 16)),
         ]),
       );
+
+  /// شريط حالة الملف: تحميل / جاهز / خطأ
+  Widget _cacheBanner() {
+    if (_xlLoading && _cached == null) {
+      return Container(
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+            color: Colors.white, borderRadius: BorderRadius.circular(14)),
+        child: Column(children: [
+          const SizedBox(
+              width: 34, height: 34,
+              child: CircularProgressIndicator(strokeWidth: 3, color: kTeal)),
+          const SizedBox(height: 12),
+          Text(_xlStatus.isEmpty ? 'جاري تحميل ملف الاكسل…' : _xlStatus,
+              style: const TextStyle(
+                  color: kInk, fontWeight: FontWeight.w700, fontSize: 13)),
+        ]),
+      );
+    }
+    final xl = _cached;
+    if (xl == null) {
+      return Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+            color: Colors.red.withAlpha(25),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.red.withAlpha(120))),
+        child: Column(children: [
+          Row(children: [
+            const Icon(Icons.cloud_off_rounded, color: Colors.red, size: 20),
+            const SizedBox(width: 8),
+            Expanded(
+                child: Text(_xlError ?? 'لا يوجد ملف — ارفعه أو أعد المحاولة',
+                    style: const TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 12.5))),
+          ]),
+          const SizedBox(height: 10),
+          Row(children: [
+            Expanded(
+                child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: kTeal, foregroundColor: Colors.black),
+                    onPressed: _xlLoading ? null : () => _loadExcel(),
+                    icon: const Icon(Icons.sync_rounded, size: 18),
+                    label: const Text('إعادة المحاولة'))),
+            const SizedBox(width: 8),
+            Expanded(
+                child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: kOrange, foregroundColor: Colors.black),
+                    onPressed: _xlLoading ? null : _upload,
+                    icon: const Icon(Icons.upload_file_rounded, size: 18),
+                    label: const Text('رفع ملف'))),
+          ]),
+        ]),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: Colors.green.withAlpha(25),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.green.withAlpha(140))),
+      child: Column(children: [
+        Row(children: [
+          _xlLoading
+              ? const SizedBox(
+                  width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
+              : const Icon(Icons.cloud_done_rounded, color: Colors.green, size: 20),
+          const SizedBox(width: 8),
+          Expanded(
+              child: Text(
+                  _xlLoading
+                      ? 'جاري تحديث الملف من المستودع بالخلفية…'
+                      : 'الملف محمل وجاهز — آخر تحديث من المستودع',
+                  style: const TextStyle(
+                      color: Colors.green,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12.5))),
+        ]),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          _statChip('المواد', '${xl.materials.length}'),
+          _statChip('الفواتير', '${xl.invoices.length}'),
+          _statChip('تاريخ آخر فاتورة', _lastDate()),
+        ]),
+        if (_xlError != null) ...[
+          const SizedBox(height: 8),
+          Text(_xlError!,
+              style: const TextStyle(
+                  color: Colors.red, fontWeight: FontWeight.w600, fontSize: 11.5)),
+        ]),
+      ]),
+    );
+  }
 
   Widget _statChip(String label, String value) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -946,72 +1045,22 @@ class _InvoicesPageState extends State<InvoicesPage> {
         ]),
       );
 
-  Widget _cacheBanner() {
-    final xl = _cached;
-    if (xl == null) {
-      return Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-            color: Colors.red.withAlpha(25),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.red.withAlpha(120))),
-        child: const Row(children: [
-          Icon(Icons.cloud_off_rounded, color: Colors.red, size: 20),
-          SizedBox(width: 8),
-          Expanded(
-              child: Text(
-                  'لا يوجد ملف محفوظ محلياً — اضغط 🔄 تحديث لجلبه من المستودع',
-                  style: TextStyle(
-                      color: Colors.red,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13))),
-        ]),
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-          color: Colors.green.withAlpha(25),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.green.withAlpha(140))),
-      child: Column(children: [
-        const Row(children: [
-          Icon(Icons.cloud_done_rounded, color: Colors.green, size: 20),
-          SizedBox(width: 8),
-          Expanded(
-              child: Text(
-                  'ملف محفوظ محلياً جاهز — لن يتغير إلا بزر 🔄 تحديث',
-                  style: TextStyle(
-                      color: Colors.green,
-                      fontWeight: FontWeight.w800,
-                      fontSize: 13))),
-        ]),
-        const SizedBox(height: 8),
-        Wrap(spacing: 8, runSpacing: 6, children: [
-          _statChip('المواد', '${xl.materials.length}'),
-          _statChip('الفواتير', '${xl.invoices.length}'),
-          _statChip('تاريخ آخر فاتورة', _lastDate.isEmpty ? '—' : _lastDate),
-        ]),
-      ]),
-    );
-  }
-
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
           title: const Text('الفواتير والنقاط'),
           actions: [
             IconButton(
+                tooltip: 'رفع ملف ونشره للمستودع + تخزين محلي',
+                icon: const Icon(Icons.upload_file_rounded),
+                onPressed: _xlLoading ? null : _upload),
+            IconButton(
                 tooltip: 'تحديث: جلب من المستودع واستبدال المخزن',
-                icon: _refreshing
+                icon: _xlLoading
                     ? const SizedBox(width: 20, height: 20,
                         child: CircularProgressIndicator(strokeWidth: 2, color: kTeal))
                     : const Icon(Icons.sync_rounded, color: kTeal),
-                onPressed: _refreshing ? null : _refresh),
-            IconButton(
-                tooltip: 'رفع ملف ونشره للمستودع + تخزين محلي',
-                icon: const Icon(Icons.upload_file_rounded),
-                onPressed: _refreshing ? null : _upload),
+                onPressed: _xlLoading ? null : () => _loadExcel()),
           ],
         ),
         body: _loading
@@ -1730,165 +1779,6 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
       ]),
     );
   }
-}
-
-// ================= فواتير سابقة (الأرشيف) =================
-class ArchivePage extends StatefulWidget {
-  final String token;
-  const ArchivePage({super.key, required this.token});
-  @override
-  State<ArchivePage> createState() => _ArchivePageState();
-}
-
-class _ArchivePageState extends State<ArchivePage> {
-  final _q = TextEditingController();
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  Future<void> _init() async {
-    if (!Store.loaded) await Store.load();
-    if (mounted) setState(() => _loading = false);
-  }
-
-  String _userName(String id) {
-    final m = Store.users.where((u) => u.id == id);
-    return m.isEmpty ? '—' : m.first.name;
-  }
-
-  String _userPhone(String id) {
-    final m = Store.users.where((u) => u.id == id);
-    return m.isEmpty ? '' : m.first.phone;
-  }
-
-  List<Invoice> get _filtered {
-    final q = _q.text.trim();
-    final all = Store.invoices.reversed.toList();
-    if (q.isEmpty) return all;
-    return all
-        .where((i) =>
-            _userName(i.userId).contains(q) ||
-            _userPhone(i.userId).contains(q) ||
-            i.no.contains(q) ||
-            i.date.contains(q))
-        .toList();
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('فواتير سابقة')),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator(color: kOrange))
-            : ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  TextField(
-                    controller: _q,
-                    onChanged: (_) => setState(() {}),
-                    style: const TextStyle(color: kInk, fontWeight: FontWeight.w700),
-                    decoration: const InputDecoration(
-                        labelText: 'بحث ذكي: اسم العميل / رقم الهاتف / رقم الفاتورة / التاريخ',
-                        labelStyle: TextStyle(color: Color(0xFF7A8699)),
-                        hintStyle: TextStyle(color: Color(0xFF7A8699)),
-                        prefixIcon: Icon(Icons.search_rounded, color: kTeal),
-                        filled: true,
-                        fillColor: Colors.white),
-                  ),
-                  const SizedBox(height: 12),
-                  Text('${_filtered.length} فاتورة',
-                      style: const TextStyle(
-                          color: Colors.grey, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 10),
-                  ..._filtered.map((inv) {
-                    final neg = inv.points < 0;
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12)),
-                      child: Row(children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(_userName(inv.userId),
-                                  style: const TextStyle(
-                                      color: kInk,
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 14)),
-                              const SizedBox(height: 2),
-                              Text(
-                                  '${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}  •  رقم ${inv.no.isEmpty ? '—' : inv.no}  •  ${_userPhone(inv.userId)}',
-                                  style: TextStyle(
-                                      color: Colors.grey.shade600, fontSize: 11)),
-                              const SizedBox(height: 4),
-                              Text(
-                                  inv.items
-                                      .map((e) => '${e.name} ×${e.qty}')
-                                      .join('، '),
-                                  style: TextStyle(
-                                      color: Colors.grey.shade700, fontSize: 12)),
-                            ],
-                          ),
-                        ),
-                        Column(children: [
-                          Text(fmt(inv.total),
-                              style: const TextStyle(
-                                  color: kInk,
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 16)),
-                          const SizedBox(height: 4),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                                color: neg
-                                    ? Colors.red.withAlpha(30)
-                                    : kTeal.withAlpha(30),
-                                borderRadius: BorderRadius.circular(8)),
-                            child: Text(
-                                neg ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
-                                style: TextStyle(
-                                    color: neg ? Colors.red : kTeal,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 12)),
-                          ),
-                          const SizedBox(height: 4),
-                          Text('مخزن: ${fmt(inv.stored)}',
-                              style: TextStyle(
-                                  color: Colors.grey.shade600, fontSize: 10)),
-                        ]),
-                        IconButton(
-                            tooltip: 'تعديل شامل',
-                            icon: const Icon(Icons.edit_rounded,
-                                color: kOrange, size: 18),
-                            onPressed: () async {
-                              final r = await Navigator.push<bool>(context,
-                                  MaterialPageRoute(
-                                      builder: (_) => InvoiceEditor(
-                                          token: widget.token, invoice: inv)));
-                              if (r == true) setState(() {});
-                            }),
-                        IconButton(
-                            tooltip: 'حذف',
-                            icon: const Icon(Icons.delete_outline_rounded,
-                                color: Colors.red, size: 18),
-                            onPressed: () async {
-                              final ok = await deleteInvoiceReverse(
-                                  context, widget.token, inv);
-                              if (ok) setState(() {});
-                            }),
-                      ]),
-                    );
-                  }),
-                ],
-              ),
-      );
 }
 
 // ================= الأكواد (جوال + كمبيوتر) =================
