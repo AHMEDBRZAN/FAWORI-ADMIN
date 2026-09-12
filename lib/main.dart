@@ -666,10 +666,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
     if (mounted) setState(() => _loading = false);
-    // 1) كاش محلي ⇒ الصفحة تفتح فوراً
     final hasCache = await _loadLocalCache();
     if (mounted) setState(() {});
-    // 2) جلب من المستودع: بالخلفية إن يوجد كاش، وإلا بشاشة تحميل
     await _loadExcel(silent: hasCache);
   }
 
@@ -932,7 +930,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
         ]),
       );
 
-  /// شريط حالة الملف: تحميل / جاهز / خطأ
   Widget _cacheBanner() {
     if (_xlLoading && _cached == null) {
       return Container(
@@ -1025,7 +1022,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
           Text(_xlError!,
               style: const TextStyle(
                   color: Colors.red, fontWeight: FontWeight.w600, fontSize: 11.5)),
-        ]),
+        ],
       ]),
     );
   }
@@ -1779,6 +1776,165 @@ class _InvoiceEditorState extends State<InvoiceEditor> {
       ]),
     );
   }
+}
+
+// ================= فواتير سابقة (الأرشيف) =================
+class ArchivePage extends StatefulWidget {
+  final String token;
+  const ArchivePage({super.key, required this.token});
+  @override
+  State<ArchivePage> createState() => _ArchivePageState();
+}
+
+class _ArchivePageState extends State<ArchivePage> {
+  final _q = TextEditingController();
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    if (!Store.loaded) await Store.load();
+    if (mounted) setState(() => _loading = false);
+  }
+
+  String _userName(String id) {
+    final m = Store.users.where((u) => u.id == id);
+    return m.isEmpty ? '—' : m.first.name;
+  }
+
+  String _userPhone(String id) {
+    final m = Store.users.where((u) => u.id == id);
+    return m.isEmpty ? '' : m.first.phone;
+  }
+
+  List<Invoice> get _filtered {
+    final q = _q.text.trim();
+    final all = Store.invoices.reversed.toList();
+    if (q.isEmpty) return all;
+    return all
+        .where((i) =>
+            _userName(i.userId).contains(q) ||
+            _userPhone(i.userId).contains(q) ||
+            i.no.contains(q) ||
+            i.date.contains(q))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('فواتير سابقة')),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: kOrange))
+            : ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  TextField(
+                    controller: _q,
+                    onChanged: (_) => setState(() {}),
+                    style: const TextStyle(color: kInk, fontWeight: FontWeight.w700),
+                    decoration: const InputDecoration(
+                        labelText: 'بحث ذكي: اسم العميل / رقم الهاتف / رقم الفاتورة / التاريخ',
+                        labelStyle: TextStyle(color: Color(0xFF7A8699)),
+                        hintStyle: TextStyle(color: Color(0xFF7A8699)),
+                        prefixIcon: Icon(Icons.search_rounded, color: kTeal),
+                        filled: true,
+                        fillColor: Colors.white),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('${_filtered.length} فاتورة',
+                      style: const TextStyle(
+                          color: Colors.grey, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 10),
+                  ..._filtered.map((inv) {
+                    final neg = inv.points < 0;
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(12)),
+                      child: Row(children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_userName(inv.userId),
+                                  style: const TextStyle(
+                                      color: kInk,
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14)),
+                              const SizedBox(height: 2),
+                              Text(
+                                  '${inv.date}  •  ${neg ? 'مرتجع' : 'مبيع'}  •  رقم ${inv.no.isEmpty ? '—' : inv.no}  •  ${_userPhone(inv.userId)}',
+                                  style: TextStyle(
+                                      color: Colors.grey.shade600, fontSize: 11)),
+                              const SizedBox(height: 4),
+                              Text(
+                                  inv.items
+                                      .map((e) => '${e.name} ×${e.qty}')
+                                      .join('، '),
+                                  style: TextStyle(
+                                      color: Colors.grey.shade700, fontSize: 12)),
+                            ],
+                          ),
+                        ),
+                        Column(children: [
+                          Text(fmt(inv.total),
+                              style: const TextStyle(
+                                  color: kInk,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16)),
+                          const SizedBox(height: 4),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                                color: neg
+                                    ? Colors.red.withAlpha(30)
+                                    : kTeal.withAlpha(30),
+                                borderRadius: BorderRadius.circular(8)),
+                            child: Text(
+                                neg ? '${fmt(inv.points)}' : '+${fmt(inv.points)}',
+                                style: TextStyle(
+                                    color: neg ? Colors.red : kTeal,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12)),
+                          ),
+                          const SizedBox(height: 4),
+                          Text('مخزن: ${fmt(inv.stored)}',
+                              style: TextStyle(
+                                  color: Colors.grey.shade600, fontSize: 10)),
+                        ]),
+                        IconButton(
+                            tooltip: 'تعديل شامل',
+                            icon: const Icon(Icons.edit_rounded,
+                                color: kOrange, size: 18),
+                            onPressed: () async {
+                              final r = await Navigator.push<bool>(context,
+                                  MaterialPageRoute(
+                                      builder: (_) => InvoiceEditor(
+                                          token: widget.token, invoice: inv)));
+                              if (r == true) setState(() {});
+                            }),
+                        IconButton(
+                            tooltip: 'حذف',
+                            icon: const Icon(Icons.delete_outline_rounded,
+                                color: Colors.red, size: 18),
+                            onPressed: () async {
+                              final ok = await deleteInvoiceReverse(
+                                  context, widget.token, inv);
+                              if (ok) setState(() {});
+                            }),
+                      ]),
+                    );
+                  }),
+                ],
+              ),
+      );
 }
 
 // ================= الأكواد (جوال + كمبيوتر) =================
