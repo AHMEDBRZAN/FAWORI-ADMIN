@@ -14,19 +14,14 @@ const int _BIG = 1000000000;
 int _clamp(int v) => v.clamp(0, _BIG);
 
 /// مولّد باركود Code39 مدمج — بدون أي مكتبة خارجية
+/// مولّد باركود Code39 مدمج — بدون أي مكتبة خارجية
 class Code39Widget extends StatelessWidget {
   final String data;
   final double height;
   final double module;
   const Code39Widget({super.key, required this.data, this.height = 90, this.module = 2});
 
-  static const Map<String, String> _T = {
-    '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
-    '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
-    '8': 'wnnwnنnنn', '9': 'nnwwnnwnn',
-  };
-
-  // جدول Code39 الكامل
+  // جدول Code39 الكامل (الوحيد الصحيح)
   static const Map<String, String> _P = {
     '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
     '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
