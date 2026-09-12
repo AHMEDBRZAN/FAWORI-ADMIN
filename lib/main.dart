@@ -23,6 +23,13 @@ class Code39Widget extends StatelessWidget {
   static const Map<String, String> _T = {
     '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
     '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
+    '8': 'wnnwnنnنn', '9': 'nnwwnnwnn',
+  };
+
+  // جدول Code39 الكامل
+  static const Map<String, String> _P = {
+    '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
+    '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
     '8': 'wnnwnnwnn', '9': 'nnwwnnwnn', 'A': 'wnnnnwnnw', 'B': 'nnwnnwnnw',
     'C': 'wnwnnwnnn', 'D': 'nnnnwwnnw', 'E': 'wnnnwwnnn', 'F': 'nnwnwwnnn',
     'G': 'nnnnnwwnw', 'H': 'wnnnnwwnn', 'I': 'nnwnnwwnn', 'J': 'nnnnwwwnn',
@@ -38,7 +45,7 @@ class Code39Widget extends StatelessWidget {
     final s = '*$data*'.toUpperCase();
     final bars = <Widget>[];
     for (int i = 0; i < s.length; i++) {
-      final p = _T[s[i]];
+      final p = _P[s[i]];
       if (p == null) continue;
       for (int e = 0; e < 9; e++) {
         final wide = p[e] == 'w';
@@ -570,7 +577,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير + الباركود (بدون كاميرا) =================
+// ================= الفواتير + الباركود =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
@@ -624,6 +631,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   final _invNo = TextEditingController();
   final _scan = TextEditingController();
   String _fetchedType = '';
+  String _lastDate = '';
   User? _selected;
   String _query = '';
   final List<_Draft> _items = [_Draft()];
@@ -658,12 +666,26 @@ class _InvoicesPageState extends State<InvoicesPage> {
   @override
   void initState() {
     super.initState();
-    _init(); // لا جلب تلقائي إطلاقاً
+    _init();
   }
 
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
+    await _loadLocalCache(); // محلي فقط — بدون إنترنت
     if (mounted) setState(() => _loading = false);
+  }
+
+  void _computeLastDate() {
+    final xl = _cached;
+    if (xl == null || xl.invoices.isEmpty) {
+      _lastDate = '';
+      return;
+    }
+    var max = '';
+    for (final i in xl.invoices) {
+      if (i.date.compareTo(max) > 0) max = i.date;
+    }
+    _lastDate = max;
   }
 
   Future<void> _persistBytes(List<int> bytes) async {
@@ -679,13 +701,14 @@ class _InvoicesPageState extends State<InvoicesPage> {
       final b64 = p.getString(_b64Key);
       if (b64 == null || b64.isEmpty) return false;
       _cached = parseFaworiExcel(base64Decode(b64));
+      _computeLastDate();
       return true;
     } catch (_) {
       return false;
     }
   }
 
-  /// 🔄 تحديث فقط: يجلب 100% من المستودع ويستبدل المخزن ويحفظه محلياً
+  /// 🔄 تحديث فقط: يجلب من المستودع ويستبدل المخزن المحلي
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
@@ -695,12 +718,12 @@ class _InvoicesPageState extends State<InvoicesPage> {
               '$kSite/assets/assets/data/fawori.xlsx?t=${DateTime.now().millisecondsSinceEpoch}'))
           .timeout(const Duration(seconds: 30));
       if (r.statusCode != 200) throw Exception('HTTP ${r.statusCode}');
-      final data = parseFaworiExcel(r.bodyBytes);
-      _cached = data;
+      _cached = parseFaworiExcel(r.bodyBytes);
+      _computeLastDate();
       await _persistBytes(r.bodyBytes);
       if (!mounted) return;
       setState(() => _refreshing = false);
-      _snack('تم الجلب من المستودع واستبدال المخزن ✅ ${data.invoices.length} فاتورة و ${data.materials.length} مادة');
+      _snack('تم الجلب من المستودع واستبدال المخزن ✅ ${_cached!.invoices.length} فاتورة و ${_cached!.materials.length} مادة');
     } catch (e) {
       if (!mounted) return;
       setState(() => _refreshing = false);
@@ -719,6 +742,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     try {
       await GH.putBinary('assets/data/fawori.xlsx', bytes, widget.token);
       _cached = parseFaworiExcel(bytes);
+      _computeLastDate();
       await _persistBytes(bytes);
       if (mounted) {
         setState(() => _refreshing = false);
@@ -768,7 +792,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _items.add(d);
   }
 
-  /// قراءة الليزر (كيبورد) أو رقم فاتورة أو باركود مادة
+  /// قراءة الليزر (كيبورد): أزواج رمز-كمية أو باركود أو رقم فاتورة
   void _onScan(String raw) {
     final s = raw.trim().toUpperCase().replaceAll('*', '');
     if (s.isEmpty) return;
@@ -820,16 +844,13 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _snack('باركود/رقم غير معروف: $s');
   }
 
-  /// جلب فاتورة بالرقم من المخزن فقط — وإن لا يوجد مخزن يجرّب المحلي بصمت
-  Future<void> _fetch() async {
-    if (_cached == null) {
-      final ok = await _loadLocalCache();
-      if (!ok) {
-        _snack('لا يوجد ملف مخزن — اضغط 🔄 تحديث لجلبه من المستودع');
-        return;
-      }
+  /// جلب فاتورة بالرقم — من الملف المحفوظ محلياً فقط
+  void _fetch() {
+    final data = _cached;
+    if (data == null) {
+      _snack('لا يوجد ملف محفوظ محلياً — اضغط 🔄 تحديث لجلبه من المستودع');
+      return;
     }
-    final data = _cached!;
     final no = _invNo.text.trim();
     if (no.isEmpty) {
       _snack('اكتب رقم الفاتورة أولاً');
@@ -837,7 +858,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
     final match = data.invoices.where((i) => i.no.trim() == no).toList();
     if (match.isEmpty) {
-      _snack('لا توجد فاتورة بالرقم $no داخل الملف المخزن');
+      _snack('لا توجد فاتورة بالرقم $no داخل الملف المحفوظ');
       return;
     }
     final f = match.first;
@@ -915,6 +936,72 @@ class _InvoicesPageState extends State<InvoicesPage> {
         ]),
       );
 
+  Widget _statChip(String label, String value) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+            color: Colors.green.withAlpha(45),
+            borderRadius: BorderRadius.circular(10)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text('$label: ',
+              style: const TextStyle(
+                  color: Colors.green, fontWeight: FontWeight.w700, fontSize: 12)),
+          Text(value,
+              style: const TextStyle(
+                  color: Colors.green, fontWeight: FontWeight.w900, fontSize: 12)),
+        ]),
+      );
+
+  /// شريط حالة الملف المحفوظ: أخضر إن موجود، أحمر إن لا
+  Widget _cacheBanner() {
+    final xl = _cached;
+    if (xl == null) {
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+            color: Colors.red.withAlpha(25),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.red.withAlpha(120))),
+        child: const Row(children: [
+          Icon(Icons.cloud_off_rounded, color: Colors.red, size: 20),
+          SizedBox(width: 8),
+          Expanded(
+              child: Text(
+                  'لا يوجد ملف محفوظ محلياً — اضغط 🔄 تحديث لجلبه من المستودع',
+                  style: TextStyle(
+                      color: Colors.red,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 13))),
+        ]),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+          color: Colors.green.withAlpha(25),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.green.withAlpha(140))),
+      child: Column(children: [
+        const Row(children: [
+          Icon(Icons.cloud_done_rounded, color: Colors.green, size: 20),
+          SizedBox(width: 8),
+          Expanded(
+              child: Text(
+                  'ملف محفوظ محلياً جاهز — لن يتغير إلا بزر 🔄 تحديث',
+                  style: TextStyle(
+                      color: Colors.green,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13))),
+        ]),
+        const SizedBox(height: 8),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          _statChip('المواد', '${xl.materials.length}'),
+          _statChip('الفواتير', '${xl.invoices.length}'),
+          _statChip('تاريخ آخر فاتورة', _lastDate.isEmpty ? '—' : _lastDate),
+        ]),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
@@ -938,6 +1025,8 @@ class _InvoicesPageState extends State<InvoicesPage> {
             : ListView(
                 padding: const EdgeInsets.all(20),
                 children: [
+                  _cacheBanner(),
+                  const SizedBox(height: 14),
                   _invoiceCard(),
                   const SizedBox(height: 24),
                   Row(children: [
@@ -1098,35 +1187,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
                         fontWeight: FontWeight.w800, fontSize: 12)),
               ),
             ],
-          ]),
-          const SizedBox(height: 10),
-          Row(children: [
-            Expanded(
-              child: TextField(
-                controller: _scan,
-                style: _inputDark,
-                onSubmitted: (v) {
-                  _onScan(v);
-                  _scan.clear();
-                },
-                decoration: const InputDecoration(
-                    labelText: 'امسح هنا ثم Enter (ليزر)...',
-                    labelStyle: _hintDark,
-                    hintStyle: _hintDark,
-                    prefixIcon: Icon(Icons.qr_code_2_rounded, color: kTeal),
-                    filled: true,
-                    fillColor: Color(0xFFF4F6F8)),
-              ),
-            ),
-            const SizedBox(width: 8),
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: kOrange, foregroundColor: Colors.black),
-              onPressed: _showBarcode,
-              icon: const Icon(Icons.print_rounded, size: 18),
-              label: const Text('باركود الفاتورة',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
-            ),
           ]),
           const SizedBox(height: 10),
           if (_selected == null) ...[
