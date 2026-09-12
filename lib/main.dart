@@ -14,14 +14,12 @@ const int _BIG = 1000000000;
 int _clamp(int v) => v.clamp(0, _BIG);
 
 /// مولّد باركود Code39 مدمج — بدون أي مكتبة خارجية
-/// مولّد باركود Code39 مدمج — بدون أي مكتبة خارجية
 class Code39Widget extends StatelessWidget {
   final String data;
   final double height;
   final double module;
   const Code39Widget({super.key, required this.data, this.height = 90, this.module = 2});
 
-  // جدول Code39 الكامل (الوحيد الصحيح)
   static const Map<String, String> _P = {
     '0': 'nnnwwnwnn', '1': 'wnnwnnnnw', '2': 'nnwwnnnnw', '3': 'wnwwnnnnn',
     '4': 'nnnwwnnnw', '5': 'wnnwwnnnn', '6': 'nnwwwnnnn', '7': 'nnnwnnwnw',
@@ -664,9 +662,11 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _init();
   }
 
+  /// عند فتح الصفحة: لا شبكة إطلاقاً.
+  /// نحمّل الملف المحلي المحفوظ مرة واحدة فقط إن لم يكن محمّلاً بعد.
   Future<void> _init() async {
     if (!Store.loaded) await Store.load();
-    await _loadLocalCache(); // محلي فقط — بدون إنترنت
+    if (_cached == null) await _loadLocalCache();
     if (mounted) setState(() => _loading = false);
   }
 
@@ -690,7 +690,9 @@ class _InvoicesPageState extends State<InvoicesPage> {
     } catch (_) {}
   }
 
+  /// يقرأ من التخزين المحلي فقط — إن كان محمّلاً مسبقاً لا يعيد التحليل
   Future<bool> _loadLocalCache() async {
+    if (_cached != null) return true;
     try {
       final p = await SharedPreferences.getInstance();
       final b64 = p.getString(_b64Key);
@@ -703,7 +705,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// 🔄 تحديث فقط: يجلب من المستودع ويستبدل المخزن المحلي
+  /// 🔄 تحديث فقط: يجلب من المستودع ويستبدل المخزن المحلي ويحفظه
   Future<void> _refresh() async {
     if (_refreshing) return;
     setState(() => _refreshing = true);
@@ -787,7 +789,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _items.add(d);
   }
 
-  /// قراءة الليزر (كيبورد): أزواج رمز-كمية أو باركود أو رقم فاتورة
   void _onScan(String raw) {
     final s = raw.trim().toUpperCase().replaceAll('*', '');
     if (s.isEmpty) return;
@@ -839,7 +840,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _snack('باركود/رقم غير معروف: $s');
   }
 
-  /// جلب فاتورة بالرقم — من الملف المحفوظ محلياً فقط
   void _fetch() {
     final data = _cached;
     if (data == null) {
@@ -946,7 +946,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
         ]),
       );
 
-  /// شريط حالة الملف المحفوظ: أخضر إن موجود، أحمر إن لا
   Widget _cacheBanner() {
     final xl = _cached;
     if (xl == null) {
