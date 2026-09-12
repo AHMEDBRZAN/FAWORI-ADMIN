@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:js' as js;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -14,7 +13,7 @@ import 'extra.dart';
 const int _BIG = 1000000000;
 int _clamp(int v) => v.clamp(0, _BIG);
 
-/// مولّد باركود Code39 مدمج — بدون مكتبات خارجية
+/// مولّد باركود Code39 مدمج — بدون أي مكتبة خارجية
 class Code39Widget extends StatelessWidget {
   final String data;
   final double height;
@@ -571,7 +570,7 @@ class _UserDialogState extends State<UserDialog> {
   }
 }
 
-// ================= الفواتير + الباركود (بدون أي جلب تلقائي) =================
+// ================= الفواتير + الباركود (بدون كاميرا) =================
 class _Draft {
   final TextEditingController name = TextEditingController();
   final TextEditingController price = TextEditingController();
@@ -659,7 +658,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
   @override
   void initState() {
     super.initState();
-    _init(); // يحمّل المستخدمين/الفواتير فقط — لا يلمس ملف الاكسل إطلاقاً
+    _init(); // لا جلب تلقائي إطلاقاً
   }
 
   Future<void> _init() async {
@@ -733,22 +732,6 @@ class _InvoicesPageState extends State<InvoicesPage> {
     }
   }
 
-  /// 📷 مسح بالكاميرا (هاتف أو أي جهاز بكاميرا) عبر المتصفح
-  void _cameraScan() {
-    final messenger = ScaffoldMessenger.of(context);
-    js.context.callMethod('startBarcodeScanner', [
-      js.allowInterop((String text) {
-        js.context.callMethod('stopBarcodeScanner', []);
-        if (text.startsWith('ERROR:')) {
-          messenger.showSnackBar(SnackBar(
-              content: Text('تعذر تشغيل الكاميرا: ${text.substring(6)}')));
-          return;
-        }
-        _onScan(text);
-      }),
-    ]);
-  }
-
   Map<String, _MatInfo> _matIndex() {
     final m = <String, _MatInfo>{};
     final xl = _cached;
@@ -785,7 +768,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _items.add(d);
   }
 
-  /// قراءة الليزر/الكاميرا: أزواج (رمز-كمية) أو باركود أو رقم فاتورة
+  /// قراءة الليزر (كيبورد) أو رقم فاتورة أو باركود مادة
   void _onScan(String raw) {
     final s = raw.trim().toUpperCase().replaceAll('*', '');
     if (s.isEmpty) return;
@@ -837,51 +820,7 @@ class _InvoicesPageState extends State<InvoicesPage> {
     _snack('باركود/رقم غير معروف: $s');
   }
 
-  void _showBarcode() {
-    final idx = _matIndex();
-    final rev = <String, String>{};
-    idx.forEach((code, info) => rev.putIfAbsent(info.name.trim(), () => code));
-    final segs = <String>[];
-    for (final d in _items) {
-      final code = rev[d.name.text.trim()];
-      if (code == null) continue;
-      segs.add('$code-${int.tryParse(d.qty.text) ?? 1}');
-    }
-    if (segs.isEmpty) {
-      _snack('لا توجد مواد معروفة الرموز لتوليد الباركود');
-      return;
-    }
-    final data = segs.join('-');
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: Colors.white,
-        title: const Text('باركود الفاتورة (يحتوي كل المواد)',
-            style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
-        content: SizedBox(
-          width: 420,
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Code39Widget(data: data, height: 90),
-            const SizedBox(height: 10),
-            SelectableText(data,
-                style: const TextStyle(fontSize: 11, color: kInk)),
-            const SizedBox(height: 6),
-            const Text(
-                'اطبعه والصقه — مسحه بالكاميرا أو الليزر يضيف كل المواد دفعة واحدة',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 11, color: Color(0xFF7A8699))),
-          ]),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('إغلاق')),
-        ],
-      ),
-    );
-  }
-
-  /// جلب فاتورة بالرقم: يستخدم المخزن فقط — وإن لا يوجد مخزن يجرّب المحلي بصمت ثم يطلب تحديث
+  /// جلب فاتورة بالرقم من المخزن فقط — وإن لا يوجد مخزن يجرّب المحلي بصمت
   Future<void> _fetch() async {
     if (_cached == null) {
       final ok = await _loadLocalCache();
@@ -916,6 +855,50 @@ class _InvoicesPageState extends State<InvoicesPage> {
       if (_items.isEmpty) _items.add(_Draft());
     });
     _snack('تم جلب ${fawori.length} مادة فاوري (${_isReturn ? 'مرتجع — تُخصم النقاط' : 'مبيع — تُضاف النقاط'})');
+  }
+
+  void _showBarcode() {
+    final idx = _matIndex();
+    final rev = <String, String>{};
+    idx.forEach((code, info) => rev.putIfAbsent(info.name.trim(), () => code));
+    final segs = <String>[];
+    for (final d in _items) {
+      final code = rev[d.name.text.trim()];
+      if (code == null) continue;
+      segs.add('$code-${int.tryParse(d.qty.text) ?? 1}');
+    }
+    if (segs.isEmpty) {
+      _snack('لا توجد مواد معروفة الرموز لتوليد الباركود');
+      return;
+    }
+    final data = segs.join('-');
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('باركود الفاتورة (يحتوي كل المواد)',
+            style: TextStyle(color: kInk, fontWeight: FontWeight.w800)),
+        content: SizedBox(
+          width: 420,
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Code39Widget(data: data, height: 90),
+            const SizedBox(height: 10),
+            SelectableText(data,
+                style: const TextStyle(fontSize: 11, color: kInk)),
+            const SizedBox(height: 6),
+            const Text(
+                'اطبعه والصقه — مسحه بالليزر يضيف كل المواد دفعة واحدة',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11, color: Color(0xFF7A8699))),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('إغلاق')),
+        ],
+      ),
+    );
   }
 
   String _userName(String id) {
@@ -1130,22 +1113,17 @@ class _InvoicesPageState extends State<InvoicesPage> {
                     labelText: 'امسح هنا ثم Enter (ليزر)...',
                     labelStyle: _hintDark,
                     hintStyle: _hintDark,
-                    prefixIcon: Icon(Icons.barcode_reader_rounded, color: kTeal),
+                    prefixIcon: Icon(Icons.qr_code_2_rounded, color: kTeal),
                     filled: true,
                     fillColor: Color(0xFFF4F6F8)),
               ),
             ),
             const SizedBox(width: 8),
-            IconButton(
-                tooltip: 'مسح بكاميرا الهاتف',
-                icon: const Icon(Icons.photo_camera_rounded, color: kTeal, size: 28),
-                onPressed: _cameraScan),
-            const SizedBox(width: 8),
             ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
                   backgroundColor: kOrange, foregroundColor: Colors.black),
               onPressed: _showBarcode,
-              icon: const Icon(Icons.qr_code_2_rounded, size: 18),
+              icon: const Icon(Icons.print_rounded, size: 18),
               label: const Text('باركود الفاتورة',
                   style: TextStyle(fontWeight: FontWeight.w800)),
             ),
